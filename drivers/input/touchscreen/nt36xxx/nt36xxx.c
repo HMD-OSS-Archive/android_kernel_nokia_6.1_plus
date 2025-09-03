@@ -441,7 +441,19 @@ info_retry:
 void fih_nvt_tpfwver_read(char *fw_ver)
 {
 	nvt_get_fw_info();
-	snprintf(fw_ver, PAGE_SIZE,"Novatek-V%02d\n", ts->fw_ver);	//SW4-HL-TP-B2N-NT36672-DoubleTap-00*_20180302
+	
+	//SW4-HL-Touch-NT36672-H_GLASS-Firmware-Update-00*{_20180823
+	if (strstr(saved_command_line, "fih,mdss_dsi_nt36672_fhd_video") != NULL)
+	{
+		pr_debug("[HL]%s, %d: panel is fih,mdss_dsi_nt36672_fhd_video, use novatek_ts_fw.bin", __func__, __LINE__);
+		snprintf(fw_ver, PAGE_SIZE,"Novatek-V%02d\n", ts->fw_ver);	//SW4-HL-TP-B2N-NT36672-DoubleTap-00*_20180302
+	}
+	else
+	{
+		pr_debug("[HL]%s, %d: panel is fih,mdss_dsi_nt36672_h_glass_fhd_video, use novatek_h_glass_ts_fw.bin", __func__, __LINE__);
+		snprintf(fw_ver, PAGE_SIZE,"Novatek-V%02X\n", ts->fw_ver);	//SW4-HL-TP-B2N-NT36672-DoubleTap-00*_20180302
+	}
+	//SW4-HL-Touch-NT36672-H_GLASS-Firmware-Update-00*}_20180823
 }
 
 //SW4-HL-Touch-ImplementDoubleTap-00+{_20170623

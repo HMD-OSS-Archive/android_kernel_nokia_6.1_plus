@@ -135,15 +135,15 @@ static u32 iris_color_x_buf[]= {
 };
 
 /*G0,G1,G2,G3,G4,G5*/
-static u32 m_dwGLuxBuffer[] = {210, 1024, 1096, 1600, 2000, 2400};
+//static u32 m_dwGLuxBuffer[] = {210, 1024, 1096, 1600, 2000, 2400};
 /*K0,K1,K2,K3,K4,K5*/
-static u32 m_dwKLuxBuffer[] = {511, 51, 46, 30, 30, 30};
+//static u32 m_dwKLuxBuffer[] = {511, 51, 46, 30, 30, 30};
 /*X1,X2,X3,X4,X5*/
-static u32 m_dwXLuxBuffer[] = {20, 1200, 1300, 1536, 3584};
+//static u32 m_dwXLuxBuffer[] = {20, 1200, 1300, 1536, 3584};
 /*org=320; Joey modify 20160712*/
-static u32 m_dwBLux = 50;
+//static u32 m_dwBLux = 50;
 /*org=128; Joey modify 20160712*/
-static u32 m_dwTH_LuxAdj = 150;
+//static u32 m_dwTH_LuxAdj = 150;
 
 u8 iris_get_dbc_lut_index(void)
 {
@@ -666,7 +666,7 @@ void iris_cm_color_gamut_set(u32 level)
 			popt, IP_OPT_MAX, IRIS_IP_EXT,
 			0x40 + level*3 + 2, (pqlt_cur_setting->source_switch == 0) ? 0x01 : skiplast);
 	} else
-		iris_init_update_ipopt_t(popt,	IP_OPT_MAX, IRIS_IP_DPP, 0xfe, 0xfe, (pqlt_cur_setting->source_switch == 0) ? 0x01 : skiplast);
+		len = iris_init_update_ipopt_t(popt, IP_OPT_MAX, IRIS_IP_DPP, 0xfe, 0xfe, (pqlt_cur_setting->source_switch == 0) ? 0x01 : skiplast);
 
 	/*do not generate lut table for source switch.*/
 	if (pqlt_cur_setting->source_switch == 0) {
@@ -708,7 +708,7 @@ void iris_dpp_gamma_set(void)
 static int iris_lce_gamm1k_set(
 		struct iris_update_ipopt *popt, uint8_t skip_last)
 {
-	u32 dwLux_i, dwnBL_AL, dwGain, dwAHEGAMMA1K;
+	u32 dwGain, dwAHEGAMMA1K;
 	u32 level;
 	struct iris_update_regval regval;
 	struct quality_setting *pqlt_cur_setting = &iris_setting.quality_cur;
@@ -719,53 +719,26 @@ static int iris_lce_gamm1k_set(
 		+ pqlt_cur_setting->pq_setting.lcelevel;
 	payload = iris_get_ipopt_payload_data(IRIS_IP_LCE, level, 5);
 
-	if (pqlt_cur_setting->pq_setting.alenable == true && payload) {
-		if (pqlt_cur_setting->luxvalue > 20000)
-			pqlt_cur_setting->luxvalue = 20000;
+	if (pqlt_cur_setting->pq_setting.alenable == true) {
+		if (pqlt_cur_setting->luxvalue > 100000)
+			pqlt_cur_setting->luxvalue = 100000;
+		if (pqlt_cur_setting->luxvalue < 10000)
+			pqlt_cur_setting->luxvalue = 10000;
+		dwGain = pqlt_cur_setting->luxvalue;
+		dwAHEGAMMA1K = ((*payload) & 0xff000000) >> 24;
 
-		if (pqlt_cur_setting->luxvalue >= (m_dwTH_LuxAdj * 8))
-			dwLux_i = MIN(8191,
-				(8 * m_dwTH_LuxAdj + pqlt_cur_setting->luxvalue / 8 - m_dwTH_LuxAdj));
-		else
-			dwLux_i = pqlt_cur_setting->luxvalue;
-
-		if (dwLux_i <= m_dwXLuxBuffer[0])
-			dwnBL_AL = MIN(m_dwGLuxBuffer[0],
-				m_dwBLux + (m_dwKLuxBuffer[0] * dwLux_i) / 64);
-		else if (dwLux_i <= m_dwXLuxBuffer[1])
-			dwnBL_AL = MIN(m_dwGLuxBuffer[1],
-				m_dwGLuxBuffer[0] + (m_dwKLuxBuffer[1] * (dwLux_i - m_dwXLuxBuffer[0])) / 64);
-		else if (dwLux_i <= m_dwXLuxBuffer[2])
-			dwnBL_AL = MIN(m_dwGLuxBuffer[2],
-				m_dwGLuxBuffer[1] + (m_dwKLuxBuffer[2] * (dwLux_i - m_dwXLuxBuffer[1])) / 64);
-		else if (dwLux_i <= m_dwXLuxBuffer[3])
-			dwnBL_AL = MIN(m_dwGLuxBuffer[3],
-				m_dwGLuxBuffer[2] + (m_dwKLuxBuffer[3] * (dwLux_i - m_dwXLuxBuffer[2])) / 64);
-		else if (dwLux_i <= m_dwXLuxBuffer[4])
-			dwnBL_AL = MIN(m_dwGLuxBuffer[4],
-				m_dwGLuxBuffer[3] + (m_dwKLuxBuffer[4] * (dwLux_i - m_dwXLuxBuffer[3])) / 64);
-		else
-			dwnBL_AL = MIN(m_dwGLuxBuffer[5],
-				m_dwGLuxBuffer[4] + (m_dwKLuxBuffer[5] * (dwLux_i - m_dwXLuxBuffer[4])) / 64);
-
-		if (dwnBL_AL < 1024)
-			dwGain = 0;
-		else
-			dwGain = dwnBL_AL - 1024;
-
-		/*max lux = 10000 ->  974, max lux = 20000 -> 976,
-		max lux = 30000 -> 976,*/
-		dwAHEGAMMA1K = (dwGain * 90) / 976;
+		dwAHEGAMMA1K =dwAHEGAMMA1K + (255 * dwGain)/100000;
 		regval.ip = IRIS_IP_LCE;
 		regval.opt_id = 0xfd;
 		regval.mask = 0xffffffff;
 		regval.value = ((*payload) & 0x00ffffff)|(dwAHEGAMMA1K<<24);
+
 		iris_update_bitmask_regval_nonread(&regval, false);
 		len = iris_init_update_ipopt_t(
 			popt, IP_OPT_MAX, IRIS_IP_LCE,
 			0xfd, 0xfd, skip_last);
 	}
-	pr_info("lux value=%d\n", pqlt_cur_setting->luxvalue);
+	pr_err("lux value=%d\n", pqlt_cur_setting->luxvalue);
 	return len;
 }
 
@@ -783,18 +756,16 @@ static int iris_lce_gamm1k_restore(
 				+ pqlt_cur_setting->pq_setting.lcelevel;
 	payload = iris_get_ipopt_payload_data(IRIS_IP_LCE, level, 5);
 
-	if (payload) {
-		regval.ip = IRIS_IP_LCE;
-		regval.opt_id = 0xfd;
-		regval.mask = 0xffffffff;
-		regval.value = *payload;
-		iris_update_bitmask_regval_nonread(&regval, false);
-		len = iris_init_update_ipopt_t(
-				popt, IP_OPT_MAX, IRIS_IP_LCE,
-				0xfd, 0xfd, skip_last);
-	}
+	regval.ip = IRIS_IP_LCE;
+	regval.opt_id = 0xfd;
+	regval.mask = 0xffffffff;
+	regval.value = *payload;
+	iris_update_bitmask_regval_nonread(&regval, false);
+	len = iris_init_update_ipopt_t(
+			popt, IP_OPT_MAX, IRIS_IP_LCE,
+			0xfd, 0xfd, skip_last);
 
-	pr_info("%s, len = %d\n", __func__, len);
+	pr_err("%s, len = %d\n", __func__, len);
 	return len;
 }
 
@@ -1162,6 +1133,7 @@ void iris_sdr2hdr_level_set(u32 level)
 	bool skiplast = 0;
 	bool dma_sent = false;
 	struct iris_cfg *pcfg = iris_get_cfg();
+	u32 gammalevel;
 
 	// Don't set sdr2hdr level.
 	if (iris_sdr2hdr_mode == 2 && level == SDR709_2_p3)
@@ -1287,6 +1259,18 @@ void iris_sdr2hdr_level_set(u32 level)
 	len = iris_init_update_ipopt_t(popt, IP_OPT_MAX, IRIS_IP_CM,
 			0xfc, 0xfc, 0x01);
 
+	if (pqlt_cur_setting->source_switch == 1) {
+		/*use liner gamma if cm lut disable*/
+		if (pqlt_cur_setting->pq_setting.cmcolortempmode ==
+			IRIS_COLOR_TEMP_OFF)
+			gammalevel = 0;
+		else
+			gammalevel = pqlt_cur_setting->pq_setting.cmcolorgamut + 1;
+
+
+		iris_update_ip_opt(popt, IP_OPT_MAX, IRIS_IP_EXT, 0xE0 + gammalevel, 0x01);
+		len = iris_init_update_ipopt_t(popt,  IP_OPT_MAX, IRIS_IP_DPP, 0xfe, 0xfe, 0x01);
+	}
 	if (iris_yuv_datapath == true)
 		peaking_csc = 0x11;
 	else {

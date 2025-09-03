@@ -84,7 +84,7 @@ static int fih_cpu_read_show(struct seq_file *m, void *v)
 	strcat(msg, buf);
 
 	switch (sample_type) {
-		case HW_REV_ES: strcat(msg, "ES, "); break;
+		case HW_REV_ES: strcat(msg, "CS, "); break;
 		default: strcpy(msg, "Unknown"); break;
 	}
 

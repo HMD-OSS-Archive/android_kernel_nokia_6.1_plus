@@ -2,7 +2,7 @@
  * Copyright (C) 2010 - 2017 Novatek, Inc.
  *
  * $Revision: 20544 $
- * $Date: 2017-12-20 11:08:15 +0800 (ÈÄ±‰∏â, 20 ÂçÅ‰∫åÊúà 2017) $
+ * $Date: 2017-12-20 11:08:15 +0800 (?±‰?, 20 ?Å‰???2017) $
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -982,7 +982,20 @@ void Boot_Update_Firmware(struct work_struct *work)
 	int32_t ret = 0;
 
 	char firmware_name[256] = "";
+	
+	//SW4-HL-Touch-NT36672-H_GLASS-Firmware-Update-00*{_20180823
+	if (strstr(saved_command_line, "fih,mdss_dsi_nt36672_fhd_video") != NULL)
+	{
+		pr_debug("[HL]%s, %d: panel is fih,mdss_dsi_nt36672_fhd_video, use novatek_ts_fw.bin", __func__, __LINE__);
 	sprintf(firmware_name, BOOT_UPDATE_FIRMWARE_NAME);
+	}
+	else
+	{
+		pr_debug("[HL]%s, %d: panel is fih,mdss_dsi_nt36672_h_glass_fhd_video, use novatek_h_glass_ts_fw.bin", __func__, __LINE__);
+		sprintf(firmware_name, BOOT_UPDATE_FIRMWARE_NAME_H_GLASS);
+	}
+	//SW4-HL-Touch-NT36672-H_GLASS-Firmware-Update-00*}_20180823
+
 	NVT_ERR("Enter Boot_Update_Firmware\n");
 	// request bin file in "/etc/firmware"
 	ret = update_firmware_request(firmware_name);

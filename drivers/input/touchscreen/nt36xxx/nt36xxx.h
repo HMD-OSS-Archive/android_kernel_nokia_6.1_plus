@@ -2,7 +2,7 @@
  * Copyright (C) 2010 - 2017 Novatek, Inc.
  *
  * $Revision: 20563 $
- * $Date: 2017-12-20 14:20:44 +0800 (ÈÄ±‰∏â, 20 ÂçÅ‰∫åÊúà 2017) $
+ * $Date: 2017-12-20 14:20:44 +0800 (?±‰?, 20 ?Å‰???2017) $
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -77,6 +77,7 @@ extern const uint16_t gesture_key_array[];
 //#endif
 #define BOOT_UPDATE_FIRMWARE 1
 #define BOOT_UPDATE_FIRMWARE_NAME "novatek_ts_fw.bin"
+#define BOOT_UPDATE_FIRMWARE_NAME_H_GLASS "novatek_h_glass_ts_fw.bin"	//SW4-HL-Touch-NT36672-H_GLASS-Firmware-Update-00+_20180823
 
 //---ESD Protect.---
 #define NVT_TOUCH_ESD_PROTECT 0
