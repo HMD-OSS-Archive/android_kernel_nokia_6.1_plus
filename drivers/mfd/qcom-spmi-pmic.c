@@ -120,29 +120,39 @@ static const struct regmap_config spmi_regmap_config = {
 
 static int pmic_spmi_probe(struct spmi_device *sdev)
 {
+	struct device_node *root = sdev->dev.of_node;
 	struct regmap *regmap;
 
 	regmap = devm_regmap_init_spmi_ext(sdev, &spmi_regmap_config);
 	if (IS_ERR(regmap))
 		return PTR_ERR(regmap);
 
-	/* Only the first slave id for a PMIC contains this information */
-	if (sdev->usid % 2 == 0)
-		pmic_spmi_show_revid(regmap, &sdev->dev);
+	pmic_spmi_show_revid(regmap, &sdev->dev);
 
-	return devm_of_platform_populate(&sdev->dev);
+	return of_platform_populate(root, NULL, NULL, &sdev->dev);
+}
+
+static void pmic_spmi_remove(struct spmi_device *sdev)
+{
+	of_platform_depopulate(&sdev->dev);
 }
 
 MODULE_DEVICE_TABLE(of, pmic_spmi_id_table);
 
 static struct spmi_driver pmic_spmi_driver = {
 	.probe = pmic_spmi_probe,
+	.remove = pmic_spmi_remove,
 	.driver = {
 		.name = "pmic-spmi",
 		.of_match_table = pmic_spmi_id_table,
 	},
 };
-module_spmi_driver(pmic_spmi_driver);
+
+int __init pmic_spmi_init(void)
+{
+	return spmi_driver_register(&pmic_spmi_driver);
+}
+arch_initcall(pmic_spmi_init);
 
 MODULE_DESCRIPTION("Qualcomm SPMI PMIC driver");
 MODULE_ALIAS("spmi:spmi-pmic");

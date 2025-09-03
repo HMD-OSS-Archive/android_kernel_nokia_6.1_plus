@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  *	Linux Magic System Request Key Hacks
  *
@@ -15,10 +14,8 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#include <linux/sched/signal.h>
+#include <linux/sched.h>
 #include <linux/sched/rt.h>
-#include <linux/sched/debug.h>
-#include <linux/sched/task.h>
 #include <linux/interrupt.h>
 #include <linux/mm.h>
 #include <linux/fs.h>
@@ -58,10 +55,11 @@
 static int __read_mostly sysrq_enabled = CONFIG_MAGIC_SYSRQ_DEFAULT_ENABLE;
 static bool __read_mostly sysrq_always_enabled;
 
-static bool sysrq_on(void)
+bool sysrq_on(void)
 {
 	return sysrq_enabled || sysrq_always_enabled;
 }
+EXPORT_SYMBOL(sysrq_on);
 
 /*
  * A value of 1 means 'all', other nonzero values are an op mask:
@@ -325,7 +323,7 @@ static struct sysrq_key_op sysrq_ftrace_dump_op = {
 
 static void sysrq_handle_showmem(int key)
 {
-	show_mem(0, NULL);
+	show_mem(0);
 }
 static struct sysrq_key_op sysrq_showmem_op = {
 	.handler	= sysrq_handle_showmem,
@@ -371,14 +369,13 @@ static void moom_callback(struct work_struct *ignored)
 	struct oom_control oc = {
 		.zonelist = node_zonelist(first_memory_node, gfp_mask),
 		.nodemask = NULL,
-		.memcg = NULL,
 		.gfp_mask = gfp_mask,
 		.order = -1,
 	};
 
 	mutex_lock(&oom_lock);
 	if (!out_of_memory(&oc))
-		pr_info("OOM request ignored. No task eligible\n");
+		pr_info("OOM request ignored because killer is disabled\n");
 	mutex_unlock(&oom_lock);
 }
 
@@ -452,7 +449,7 @@ static struct sysrq_key_op *sysrq_key_table[36] = {
 	 */
 	NULL,				/* a */
 	&sysrq_reboot_op,		/* b */
-	&sysrq_crash_op,		/* c */
+	&sysrq_crash_op,		/* c & ibm_emac driver debug */
 	&sysrq_showlocks_op,		/* d */
 	&sysrq_term_op,			/* e */
 	&sysrq_moom_op,			/* f */

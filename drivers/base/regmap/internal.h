@@ -13,7 +13,6 @@
 #ifndef _REGMAP_INTERNAL_H
 #define _REGMAP_INTERNAL_H
 
-#include <linux/device.h>
 #include <linux/regmap.h>
 #include <linux/fs.h>
 #include <linux/list.h>
@@ -86,6 +85,9 @@ struct regmap {
 
 	struct list_head debugfs_off_cache;
 	struct mutex cache_lock;
+
+	unsigned int dump_address;
+	unsigned int dump_count;
 #endif
 
 	unsigned int max_register;
@@ -105,13 +107,12 @@ struct regmap {
 
 	bool defer_caching;
 
-	unsigned long read_flag_mask;
-	unsigned long write_flag_mask;
+	u8 read_flag_mask;
+	u8 write_flag_mask;
 
 	/* number of bits to (left) shift the reg value when formatting*/
 	int reg_shift;
 	int reg_stride;
-	int reg_stride_order;
 
 	/* regcache specific members */
 	const struct regcache_ops *cache_ops;
@@ -173,7 +174,6 @@ struct regcache_ops {
 	int (*drop)(struct regmap *map, unsigned int min, unsigned int max);
 };
 
-bool regmap_cached(struct regmap *map, unsigned int reg);
 bool regmap_writeable(struct regmap *map, unsigned int reg);
 bool regmap_readable(struct regmap *map, unsigned int reg);
 bool regmap_volatile(struct regmap *map, unsigned int reg);
@@ -248,6 +248,10 @@ int regcache_lookup_reg(struct regmap *map, unsigned int reg);
 int _regmap_raw_write(struct regmap *map, unsigned int reg,
 		      const void *val, size_t val_len);
 
+int _regmap_raw_multi_reg_write(struct regmap *map,
+				const struct reg_sequence *regs,
+				size_t num_regs);
+
 void regmap_async_complete_cb(struct regmap_async *async, int ret);
 
 enum regmap_endian regmap_get_val_endian(struct device *dev,
@@ -264,21 +268,6 @@ static inline const char *regmap_name(const struct regmap *map)
 		return dev_name(map->dev);
 
 	return map->name;
-}
-
-static inline unsigned int regmap_get_offset(const struct regmap *map,
-					     unsigned int index)
-{
-	if (map->reg_stride_order >= 0)
-		return index << map->reg_stride_order;
-	else
-		return index * map->reg_stride;
-}
-
-static inline unsigned int regcache_get_index_by_order(const struct regmap *map,
-						       unsigned int reg)
-{
-	return reg >> map->reg_stride_order;
 }
 
 #endif

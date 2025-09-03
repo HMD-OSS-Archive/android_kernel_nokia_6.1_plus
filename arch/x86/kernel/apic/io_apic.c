@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  *	Intel IO-APIC support for multi-Pentium hosts.
  *
@@ -33,7 +32,6 @@
 
 #include <linux/mm.h>
 #include <linux/interrupt.h>
-#include <linux/irq.h>
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/sched.h>
@@ -41,7 +39,7 @@
 #include <linux/mc146818rtc.h>
 #include <linux/compiler.h>
 #include <linux/acpi.h>
-#include <linux/export.h>
+#include <linux/module.h>
 #include <linux/syscore_ops.h>
 #include <linux/freezer.h>
 #include <linux/kthread.h>
@@ -50,6 +48,7 @@
 #include <linux/bootmem.h>
 
 #include <asm/irqdomain.h>
+#include <asm/idle.h>
 #include <asm/io.h>
 #include <asm/smp.h>
 #include <asm/cpu.h>
@@ -982,7 +981,7 @@ static int alloc_irq_from_domain(struct irq_domain *domain, int ioapic, u32 gsi,
 
 	return __irq_domain_alloc_irqs(domain, irq, 1,
 				       ioapic_alloc_attr_node(info),
-				       info, legacy, NULL);
+				       info, legacy);
 }
 
 /*
@@ -1015,8 +1014,7 @@ static int alloc_isa_irq_from_domain(struct irq_domain *domain,
 					  info->ioapic_pin))
 			return -ENOMEM;
 	} else {
-		irq = __irq_domain_alloc_irqs(domain, irq, 1, node, info, true,
-					      NULL);
+		irq = __irq_domain_alloc_irqs(domain, irq, 1, node, info, true);
 		if (irq >= 0) {
 			irq_data = irq_domain_get_irq_data(domain, irq);
 			data = irq_data->chip_data;
@@ -1109,12 +1107,12 @@ int mp_map_gsi_to_irq(u32 gsi, unsigned int flags, struct irq_alloc_info *info)
 
 	ioapic = mp_find_ioapic(gsi);
 	if (ioapic < 0)
-		return -ENODEV;
+		return -1;
 
 	pin = mp_find_ioapic_pin(ioapic, gsi);
 	idx = find_irq_entry(ioapic, pin, mp_INT);
 	if ((flags & IOAPIC_MAP_CHECK) && idx < 0)
-		return -ENODEV;
+		return -1;
 
 	return mp_map_pin_to_irq(gsi, idx, ioapic, pin, flags, info);
 }
@@ -1202,6 +1200,28 @@ EXPORT_SYMBOL(IO_APIC_get_PCI_irq_vector);
 
 static struct irq_chip ioapic_chip, ioapic_ir_chip;
 
+#ifdef CONFIG_X86_32
+static inline int IO_APIC_irq_trigger(int irq)
+{
+	int apic, idx, pin;
+
+	for_each_ioapic_pin(apic, pin) {
+		idx = find_irq_entry(apic, pin, mp_INT);
+		if ((idx != -1) && (irq == pin_2_irq(idx, apic, pin, 0)))
+			return irq_trigger(idx);
+	}
+	/*
+         * nonexistent IRQs are edge default
+         */
+	return 0;
+}
+#else
+static inline int IO_APIC_irq_trigger(int irq)
+{
+	return 1;
+}
+#endif
+
 static void __init setup_IO_APIC_irqs(void)
 {
 	unsigned int ioapic, pin;
@@ -1245,7 +1265,7 @@ static void io_apic_print_entries(unsigned int apic, unsigned int nr_entries)
 			 entry.vector, entry.irr, entry.delivery_status);
 		if (ir_entry->format)
 			printk(KERN_DEBUG "%s, remapped, I(%04X),  Z(%X)\n",
-			       buf, (ir_entry->index2 << 15) | ir_entry->index,
+			       buf, (ir_entry->index << 15) | ir_entry->index,
 			       ir_entry->zero);
 		else
 			printk(KERN_DEBUG "%s, %s, D(%02X), M(%1d)\n",
@@ -1434,7 +1454,7 @@ void native_disable_io_apic(void)
 		ioapic_write_entry(ioapic_i8259.apic, ioapic_i8259.pin, entry);
 	}
 
-	if (boot_cpu_has(X86_FEATURE_APIC) || apic_from_smp_config())
+	if (cpu_has_apic || apic_from_smp_config())
 		disconnect_bsp_APIC(ioapic_i8259.pin != -1);
 }
 
@@ -1572,7 +1592,7 @@ void __init setup_ioapic_ids_from_mpc(void)
 	 * no meaning without the serial APIC bus.
 	 */
 	if (!(boot_cpu_data.x86_vendor == X86_VENDOR_INTEL)
-		|| APIC_XAPIC(boot_cpu_apic_version))
+		|| APIC_XAPIC(apic_version[boot_cpu_physical_apicid]))
 		return;
 	setup_ioapic_ids_from_mpc_nocheck();
 }
@@ -2203,8 +2223,6 @@ static int mp_irqdomain_create(int ioapic)
 	struct ioapic *ip = &ioapics[ioapic];
 	struct ioapic_domain_cfg *cfg = &ip->irqdomain_cfg;
 	struct mp_ioapic_gsi *gsi_cfg = mp_ioapic_gsi_routing(ioapic);
-	struct fwnode_handle *fn;
-	char *name = "IO-APIC";
 
 	if (cfg->type == IOAPIC_DOMAIN_INVALID)
 		return 0;
@@ -2215,25 +2233,9 @@ static int mp_irqdomain_create(int ioapic)
 	parent = irq_remapping_get_ir_irq_domain(&info);
 	if (!parent)
 		parent = x86_vector_domain;
-	else
-		name = "IO-APIC-IR";
 
-	/* Handle device tree enumerated APICs proper */
-	if (cfg->dev) {
-		fn = of_node_to_fwnode(cfg->dev);
-	} else {
-		fn = irq_domain_alloc_named_id_fwnode(name, ioapic);
-		if (!fn)
-			return -ENOMEM;
-	}
-
-	ip->irqdomain = irq_domain_create_linear(fn, hwirqs, cfg->ops,
-						 (void *)(long)ioapic);
-
-	/* Release fw handle if it was allocated above */
-	if (!cfg->dev)
-		irq_domain_free_fwnode(fn);
-
+	ip->irqdomain = irq_domain_add_linear(cfg->dev, hwirqs, cfg->ops,
+					      (void *)(long)ioapic);
 	if (!ip->irqdomain)
 		return -ENOMEM;
 
@@ -2424,7 +2426,7 @@ static int io_apic_get_unique_id(int ioapic, int apic_id)
 static u8 io_apic_unique_id(int idx, u8 id)
 {
 	if ((boot_cpu_data.x86_vendor == X86_VENDOR_INTEL) &&
-	    !APIC_XAPIC(boot_cpu_apic_version))
+	    !APIC_XAPIC(apic_version[boot_cpu_physical_apicid]))
 		return io_apic_get_unique_id(idx, id);
 	else
 		return id;
@@ -2569,25 +2571,29 @@ static struct resource * __init ioapic_setup_resources(void)
 	unsigned long n;
 	struct resource *res;
 	char *mem;
-	int i;
+	int i, num = 0;
 
-	if (nr_ioapics == 0)
+	for_each_ioapic(i)
+		num++;
+	if (num == 0)
 		return NULL;
 
 	n = IOAPIC_RESOURCE_NAME_SIZE + sizeof(struct resource);
-	n *= nr_ioapics;
+	n *= num;
 
 	mem = alloc_bootmem(n);
 	res = (void *)mem;
 
-	mem += sizeof(struct resource) * nr_ioapics;
+	mem += sizeof(struct resource) * num;
 
+	num = 0;
 	for_each_ioapic(i) {
-		res[i].name = mem;
-		res[i].flags = IORESOURCE_MEM | IORESOURCE_BUSY;
+		res[num].name = mem;
+		res[num].flags = IORESOURCE_MEM | IORESOURCE_BUSY;
 		snprintf(mem, IOAPIC_RESOURCE_NAME_SIZE, "IOAPIC %u", i);
 		mem += IOAPIC_RESOURCE_NAME_SIZE;
-		ioapics[i].iomem_res = &res[i];
+		ioapics[i].iomem_res = &res[num];
+		num++;
 	}
 
 	ioapic_resources = res;

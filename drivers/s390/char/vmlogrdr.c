@@ -21,7 +21,7 @@
 #include <linux/interrupt.h>
 #include <linux/spinlock.h>
 #include <linux/atomic.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/cpcmd.h>
 #include <asm/debug.h>
 #include <asm/ebcdic.h>
@@ -343,7 +343,8 @@ static int vmlogrdr_open (struct inode *inode, struct file *filp)
 	if (logptr->autorecording) {
 		ret = vmlogrdr_recording(logptr,1,logptr->autopurge);
 		if (ret)
-			pr_warn("vmlogrdr: failed to start recording automatically\n");
+			pr_warning("vmlogrdr: failed to start "
+				   "recording automatically\n");
 	}
 
 	/* create connection to the system service */
@@ -395,7 +396,8 @@ static int vmlogrdr_release (struct inode *inode, struct file *filp)
 	if (logptr->autorecording) {
 		ret = vmlogrdr_recording(logptr,0,logptr->autopurge);
 		if (ret)
-			pr_warn("vmlogrdr: failed to stop recording automatically\n");
+			pr_warning("vmlogrdr: failed to stop "
+				   "recording automatically\n");
 	}
 	logptr->dev_in_use = 0;
 
@@ -641,8 +643,10 @@ static ssize_t vmlogrdr_recording_store(struct device * dev,
 static DEVICE_ATTR(recording, 0200, NULL, vmlogrdr_recording_store);
 
 
-static ssize_t recording_status_show(struct device_driver *driver, char *buf)
+static ssize_t vmlogrdr_recording_status_show(struct device_driver *driver,
+					      char *buf)
 {
+
 	static const char cp_command[] = "QUERY RECORDING ";
 	int len;
 
@@ -650,7 +654,8 @@ static ssize_t recording_status_show(struct device_driver *driver, char *buf)
 	len = strlen(buf);
 	return len;
 }
-static DRIVER_ATTR_RO(recording_status);
+static DRIVER_ATTR(recording_status, 0444, vmlogrdr_recording_status_show,
+		   NULL);
 static struct attribute *vmlogrdr_drv_attrs[] = {
 	&driver_attr_recording_status.attr,
 	NULL,

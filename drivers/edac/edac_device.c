@@ -12,20 +12,23 @@
  * 19 Jan 2007
  */
 
-#include <asm/page.h>
-#include <linux/uaccess.h>
-#include <linux/ctype.h>
-#include <linux/highmem.h>
-#include <linux/init.h>
-#include <linux/jiffies.h>
 #include <linux/module.h>
-#include <linux/slab.h>
+#include <linux/types.h>
 #include <linux/smp.h>
-#include <linux/spinlock.h>
+#include <linux/init.h>
 #include <linux/sysctl.h>
+#include <linux/highmem.h>
 #include <linux/timer.h>
+#include <linux/slab.h>
+#include <linux/jiffies.h>
+#include <linux/spinlock.h>
+#include <linux/list.h>
+#include <linux/ctype.h>
+#include <linux/workqueue.h>
+#include <asm/uaccess.h>
+#include <asm/page.h>
 
-#include "edac_device.h"
+#include "edac_core.h"
 #include "edac_module.h"
 
 /* lock for the list: 'edac_device_list', manipulation of this list
@@ -47,6 +50,21 @@ static void edac_device_dump_device(struct edac_device_ctl_info *edac_dev)
 }
 #endif				/* CONFIG_EDAC_DEBUG */
 
+
+/*
+ * edac_device_alloc_ctl_info()
+ *	Allocate a new edac device control info structure
+ *
+ *	The control structure is allocated in complete chunk
+ *	from the OS. It is in turn sub allocated to the
+ *	various objects that compose the structure
+ *
+ *	The structure has a 'nr_instance' array within itself.
+ *	Each instance represents a major component
+ *		Example:  L1 cache and L2 cache are 2 instance components
+ *
+ *	Within each instance is an array of 'nr_blocks' blockoffsets
+ */
 struct edac_device_ctl_info *edac_device_alloc_ctl_info(
 	unsigned sz_private,
 	char *edac_device_name, unsigned nr_instances,
@@ -226,6 +244,11 @@ struct edac_device_ctl_info *edac_device_alloc_ctl_info(
 }
 EXPORT_SYMBOL_GPL(edac_device_alloc_ctl_info);
 
+/*
+ * edac_device_free_ctl_info()
+ *	frees the memory allocated by the edac_device_alloc_ctl_info()
+ *	function
+ */
 void edac_device_free_ctl_info(struct edac_device_ctl_info *ctl_info)
 {
 	edac_device_unregister_sysfs_main_kobj(ctl_info);
@@ -367,9 +390,11 @@ static void edac_device_workq_function(struct work_struct *work_req)
 	 * between integral seconds
 	 */
 	if (edac_dev->poll_msec == 1000)
-		edac_queue_work(&edac_dev->work, round_jiffies_relative(edac_dev->delay));
+		queue_delayed_work(edac_workqueue, &edac_dev->work,
+				round_jiffies_relative(edac_dev->delay));
 	else
-		edac_queue_work(&edac_dev->work, edac_dev->delay);
+		queue_delayed_work(edac_workqueue, &edac_dev->work,
+				edac_dev->delay);
 }
 
 /*
@@ -377,8 +402,8 @@ static void edac_device_workq_function(struct work_struct *work_req)
  *	initialize a workq item for this edac_device instance
  *	passing in the new delay period in msec
  */
-static void edac_device_workq_setup(struct edac_device_ctl_info *edac_dev,
-				    unsigned msec)
+void edac_device_workq_setup(struct edac_device_ctl_info *edac_dev,
+				unsigned msec)
 {
 	edac_dbg(0, "\n");
 
@@ -386,10 +411,16 @@ static void edac_device_workq_setup(struct edac_device_ctl_info *edac_dev,
 	 * to used in the time period calculation
 	 * then calc the number of jiffies that represents
 	 */
+	if (!msec)
+		msec = 1000;
 	edac_dev->poll_msec = msec;
 	edac_dev->delay = msecs_to_jiffies(msec);
 
-	INIT_DELAYED_WORK(&edac_dev->work, edac_device_workq_function);
+	if (edac_dev->defer_work)
+		INIT_DEFERRABLE_WORK(&edac_dev->work,
+					edac_device_workq_function);
+	else
+		INIT_DELAYED_WORK(&edac_dev->work, edac_device_workq_function);
 
 	/* optimize here for the 1 second case, which will be normal value, to
 	 * fire ON the 1 second time event. This helps reduce all sorts of
@@ -397,23 +428,26 @@ static void edac_device_workq_setup(struct edac_device_ctl_info *edac_dev,
 	 * to fire together on the 1 second exactly
 	 */
 	if (edac_dev->poll_msec == 1000)
-		edac_queue_work(&edac_dev->work, round_jiffies_relative(edac_dev->delay));
+		queue_delayed_work(edac_workqueue, &edac_dev->work,
+				round_jiffies_relative(edac_dev->delay));
 	else
-		edac_queue_work(&edac_dev->work, edac_dev->delay);
+		queue_delayed_work(edac_workqueue, &edac_dev->work,
+				edac_dev->delay);
 }
 
 /*
  * edac_device_workq_teardown
  *	stop the workq processing on this edac_dev
  */
-static void edac_device_workq_teardown(struct edac_device_ctl_info *edac_dev)
+void edac_device_workq_teardown(struct edac_device_ctl_info *edac_dev)
 {
 	if (!edac_dev->edac_check)
 		return;
 
 	edac_dev->op_state = OP_OFFLINE;
 
-	edac_stop_work(&edac_dev->work);
+	cancel_delayed_work_sync(&edac_dev->work);
+	flush_workqueue(edac_workqueue);
 }
 
 /*
@@ -426,17 +460,24 @@ static void edac_device_workq_teardown(struct edac_device_ctl_info *edac_dev)
 void edac_device_reset_delay_period(struct edac_device_ctl_info *edac_dev,
 					unsigned long value)
 {
-	unsigned long jiffs = msecs_to_jiffies(value);
+	/* cancel the current workq request, without the mutex lock */
+	edac_device_workq_teardown(edac_dev);
 
-	if (value == 1000)
-		jiffs = round_jiffies_relative(value);
+	/* acquire the mutex before doing the workq setup */
+	mutex_lock(&device_ctls_mutex);
 
-	edac_dev->poll_msec = value;
-	edac_dev->delay	    = jiffs;
+	/* restart the workq request, with new delay value */
+	edac_device_workq_setup(edac_dev, value);
 
-	edac_mod_work(&edac_dev->work, jiffs);
+	mutex_unlock(&device_ctls_mutex);
 }
 
+/*
+ * edac_device_alloc_index: Allocate a unique device index number
+ *
+ * Return:
+ *	allocated index number
+ */
 int edac_device_alloc_index(void)
 {
 	static atomic_t device_indexes = ATOMIC_INIT(0);
@@ -445,6 +486,17 @@ int edac_device_alloc_index(void)
 }
 EXPORT_SYMBOL_GPL(edac_device_alloc_index);
 
+/**
+ * edac_device_add_device: Insert the 'edac_dev' structure into the
+ * edac_device global list and create sysfs entries associated with
+ * edac_device structure.
+ * @edac_device: pointer to the edac_device structure to be added to the list
+ * 'edac_device' structure.
+ *
+ * Return:
+ *	0	Success
+ *	!0	Failure
+ */
 int edac_device_add_device(struct edac_device_ctl_info *edac_dev)
 {
 	edac_dbg(0, "\n");
@@ -477,7 +529,7 @@ int edac_device_add_device(struct edac_device_ctl_info *edac_dev)
 		 * enable workq processing on this instance,
 		 * default = 1000 msec
 		 */
-		edac_device_workq_setup(edac_dev, 1000);
+		edac_device_workq_setup(edac_dev, edac_dev->poll_msec);
 	} else {
 		edac_dev->op_state = OP_RUNNING_INTERRUPT;
 	}
@@ -501,6 +553,19 @@ fail0:
 }
 EXPORT_SYMBOL_GPL(edac_device_add_device);
 
+/**
+ * edac_device_del_device:
+ *	Remove sysfs entries for specified edac_device structure and
+ *	then remove edac_device structure from global list
+ *
+ * @dev:
+ *	Pointer to 'struct device' representing edac_device
+ *	structure to remove.
+ *
+ * Return:
+ *	Pointer to removed edac_device structure,
+ *	OR NULL if device not found.
+ */
 struct edac_device_ctl_info *edac_device_del_device(struct device *dev)
 {
 	struct edac_device_ctl_info *edac_dev;
@@ -549,12 +614,22 @@ static inline int edac_device_get_log_ue(struct edac_device_ctl_info *edac_dev)
 	return edac_dev->log_ue;
 }
 
+static inline int edac_device_get_panic_on_ce(struct edac_device_ctl_info
+					*edac_dev)
+{
+	return edac_dev->panic_on_ce;
+}
+
 static inline int edac_device_get_panic_on_ue(struct edac_device_ctl_info
 					*edac_dev)
 {
 	return edac_dev->panic_on_ue;
 }
 
+/*
+ * edac_device_handle_ce
+ *	perform a common output and handling of an 'edac_dev' CE event
+ */
 void edac_device_handle_ce(struct edac_device_ctl_info *edac_dev,
 			int inst_nr, int block_nr, const char *msg)
 {
@@ -594,9 +669,18 @@ void edac_device_handle_ce(struct edac_device_ctl_info *edac_dev,
 				"CE: %s instance: %s block: %s '%s'\n",
 				edac_dev->ctl_name, instance->name,
 				block ? block->name : "N/A", msg);
+
+	if (edac_device_get_panic_on_ce(edac_dev))
+		panic("EDAC %s: CE instance: %s block %s '%s'\n",
+			edac_dev->ctl_name, instance->name,
+			block ? block->name : "N/A", msg);
 }
 EXPORT_SYMBOL_GPL(edac_device_handle_ce);
 
+/*
+ * edac_device_handle_ue
+ *	perform a common output and handling of an 'edac_dev' UE event
+ */
 void edac_device_handle_ue(struct edac_device_ctl_info *edac_dev,
 			int inst_nr, int block_nr, const char *msg)
 {

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ASM_PARISC_PCI_H
 #define __ASM_PARISC_PCI_H
 
@@ -168,7 +167,6 @@ static inline void pcibios_register_hba(struct pci_hba_data *x)
 {
 }
 #endif
-extern void pcibios_init_bridge(struct pci_dev *);
 
 /*
  * pcibios_assign_all_busses() is used in drivers/pci/pci.c:pci_do_scan_bus()
@@ -195,12 +193,17 @@ extern void pcibios_init_bridge(struct pci_dev *);
 #define PCIBIOS_MIN_IO          0x10
 #define PCIBIOS_MIN_MEM         0x1000 /* NBPG - but pci/setup-res.c dies */
 
+/* export the pci_ DMA API in terms of the dma_ one */
+#include <asm-generic/pci-dma-compat.h>
+
 static inline int pci_get_legacy_ide_irq(struct pci_dev *dev, int channel)
 {
 	return channel ? 15 : 14;
 }
 
 #define HAVE_PCI_MMAP
-#define ARCH_GENERIC_PCI_MMAP_RESOURCE
+
+extern int pci_mmap_page_range(struct pci_dev *dev, struct vm_area_struct *vma,
+	enum pci_mmap_state mmap_state, int write_combine);
 
 #endif /* __ASM_PARISC_PCI_H */

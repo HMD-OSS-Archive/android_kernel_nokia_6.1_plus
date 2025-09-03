@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  *  ioctl.c
  *
@@ -20,9 +19,8 @@
 #include <linux/highuid.h>
 #include <linux/vmalloc.h>
 #include <linux/sched.h>
-#include <linux/cred.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #include "ncp_fs.h"
 
@@ -235,7 +233,7 @@ ncp_get_charsets(struct ncp_server* server, struct ncp_nls_ioctl __user *arg)
 		len = strlen(server->nls_vol->charset);
 		if (len > NCP_IOCSNAME_LEN)
 			len = NCP_IOCSNAME_LEN;
-		strncpy(user.codepage, server->nls_vol->charset, len);
+		strscpy(user.codepage, server->nls_vol->charset, NCP_IOCSNAME_LEN);
 		user.codepage[len] = 0;
 	}
 
@@ -245,7 +243,7 @@ ncp_get_charsets(struct ncp_server* server, struct ncp_nls_ioctl __user *arg)
 		len = strlen(server->nls_io->charset);
 		if (len > NCP_IOCSNAME_LEN)
 			len = NCP_IOCSNAME_LEN;
-		strncpy(user.iocharset,	server->nls_io->charset, len);
+		strscpy(user.iocharset,	server->nls_io->charset, NCP_IOCSNAME_LEN);
 		user.iocharset[len] = 0;
 	}
 	mutex_unlock(&server->root_setup_lock);

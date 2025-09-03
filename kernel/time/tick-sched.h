@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _TICK_SCHED_H
 #define _TICK_SCHED_H
 
@@ -28,7 +27,6 @@ enum tick_nohz_mode {
  *			timer is modified for nohz sleeps. This is necessary
  *			to resume the tick timer operation in the timeline
  *			when the CPU returns from nohz sleep.
- * @next_tick:		Next tick to be fired when in dynticks mode.
  * @tick_stopped:	Indicator that the idle tick has been stopped
  * @idle_jiffies:	jiffies at the entry to idle for idle time accounting
  * @idle_calls:		Total number of idle calls
@@ -38,8 +36,7 @@ enum tick_nohz_mode {
  * @idle_exittime:	Time when the idle state was left
  * @idle_sleeptime:	Sum of the time slept in idle with sched tick stopped
  * @iowait_sleeptime:	Sum of the time slept in idle with sched tick stopped, with IO outstanding
- * @timer_expires:	Anticipated timer expiration time (in case sched tick is stopped)
- * @timer_expires_base:	Base time clock monotonic for @timer_expires
+ * @sleep_length:	Duration of the current idle sleep
  * @do_timer_lst:	CPU was the last one doing do_timer before going idle
  */
 struct tick_sched {
@@ -47,7 +44,6 @@ struct tick_sched {
 	unsigned long			check_clocks;
 	enum tick_nohz_mode		nohz_mode;
 	ktime_t				last_tick;
-	ktime_t				next_tick;
 	int				inidle;
 	int				tick_stopped;
 	unsigned long			idle_jiffies;
@@ -59,13 +55,11 @@ struct tick_sched {
 	ktime_t				idle_exittime;
 	ktime_t				idle_sleeptime;
 	ktime_t				iowait_sleeptime;
+	ktime_t				sleep_length;
 	unsigned long			last_jiffies;
-	u64				timer_expires;
-	u64				timer_expires_base;
 	u64				next_timer;
 	ktime_t				idle_expires;
 	int				do_timer_last;
-	atomic_t			tick_dep_mask;
 };
 
 extern struct tick_sched *tick_get_tick_sched(int cpu);

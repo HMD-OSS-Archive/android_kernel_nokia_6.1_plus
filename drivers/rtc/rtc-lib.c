@@ -11,7 +11,7 @@
  * published by the Free Software Foundation.
 */
 
-#include <linux/export.h>
+#include <linux/module.h>
 #include <linux/rtc.h>
 
 static const unsigned char rtc_days_in_month[] = {
@@ -146,3 +146,5 @@ struct rtc_time rtc_ktime_to_tm(ktime_t kt)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(rtc_ktime_to_tm);
+
+MODULE_LICENSE("GPL");

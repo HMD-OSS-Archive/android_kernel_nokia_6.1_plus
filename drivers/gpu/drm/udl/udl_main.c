@@ -16,8 +16,6 @@
 /* -BULK_SIZE as per usb-skeleton. Can we get full page and avoid overhead? */
 #define BULK_SIZE 512
 
-#define NR_USB_REQUEST_CHANNEL 0x12
-
 #define MAX_TRANSFER (PAGE_SIZE*16 - BULK_SIZE)
 #define WRITES_IN_FLIGHT (4)
 #define MAX_VENDOR_DESCRIPTOR_SIZE 256
@@ -28,7 +26,7 @@
 static int udl_parse_vendor_descriptor(struct drm_device *dev,
 				       struct usb_device *usbdev)
 {
-	struct udl_device *udl = to_udl(dev);
+	struct udl_device *udl = dev->dev_private;
 	char *desc;
 	char *buf;
 	char *desc_end;
@@ -92,32 +90,6 @@ success:
 	return true;
 }
 
-/*
- * Need to ensure a channel is selected before submitting URBs
- */
-static int udl_select_std_channel(struct udl_device *udl)
-{
-	int ret;
-	static const u8 set_def_chn[] = {0x57, 0xCD, 0xDC, 0xA7,
-					 0x1C, 0x88, 0x5E, 0x15,
-					 0x60, 0xFE, 0xC6, 0x97,
-					 0x16, 0x3D, 0x47, 0xF2};
-	void *sendbuf;
-
-	sendbuf = kmemdup(set_def_chn, sizeof(set_def_chn), GFP_KERNEL);
-	if (!sendbuf)
-		return -ENOMEM;
-
-	ret = usb_control_msg(udl->udev,
-			      usb_sndctrlpipe(udl->udev, 0),
-			      NR_USB_REQUEST_CHANNEL,
-			      (USB_DIR_OUT | USB_TYPE_VENDOR), 0, 0,
-			      sendbuf, sizeof(set_def_chn),
-			      USB_CTRL_SET_TIMEOUT);
-	kfree(sendbuf);
-	return ret < 0 ? ret : 0;
-}
-
 static void udl_release_urb_work(struct work_struct *work)
 {
 	struct urb_node *unode = container_of(work, struct urb_node,
@@ -164,7 +136,7 @@ void udl_urb_completion(struct urb *urb)
 
 static void udl_free_urb_list(struct drm_device *dev)
 {
-	struct udl_device *udl = to_udl(dev);
+	struct udl_device *udl = dev->dev_private;
 	int count = udl->urbs.count;
 	struct list_head *node;
 	struct urb_node *unode;
@@ -198,7 +170,7 @@ static void udl_free_urb_list(struct drm_device *dev)
 
 static int udl_alloc_urb_list(struct drm_device *dev, int count, size_t size)
 {
-	struct udl_device *udl = to_udl(dev);
+	struct udl_device *udl = dev->dev_private;
 	struct urb *urb;
 	struct urb_node *unode;
 	char *buf;
@@ -262,7 +234,7 @@ retry:
 
 struct urb *udl_get_urb(struct drm_device *dev)
 {
-	struct udl_device *udl = to_udl(dev);
+	struct udl_device *udl = dev->dev_private;
 	int ret = 0;
 	struct list_head *entry;
 	struct urb_node *unode;
@@ -296,7 +268,7 @@ error:
 
 int udl_submit_urb(struct drm_device *dev, struct urb *urb, size_t len)
 {
-	struct udl_device *udl = to_udl(dev);
+	struct udl_device *udl = dev->dev_private;
 	int ret;
 
 	BUG_ON(len > udl->urbs.size);
@@ -311,21 +283,26 @@ int udl_submit_urb(struct drm_device *dev, struct urb *urb, size_t len)
 	return ret;
 }
 
-int udl_init(struct udl_device *udl)
+int udl_driver_load(struct drm_device *dev, unsigned long flags)
 {
-	struct drm_device *dev = &udl->drm;
+	struct usb_device *udev = (void*)flags;
+	struct udl_device *udl;
 	int ret = -ENOMEM;
 
 	DRM_DEBUG("\n");
+	udl = kzalloc(sizeof(struct udl_device), GFP_KERNEL);
+	if (!udl)
+		return -ENOMEM;
+
+	udl->udev = udev;
+	udl->ddev = dev;
+	dev->dev_private = udl;
 
 	if (!udl_parse_vendor_descriptor(dev, udl->udev)) {
 		ret = -ENODEV;
 		DRM_ERROR("firmware not recognized. Assume incompatible device\n");
 		goto err;
 	}
-
-	if (udl_select_std_channel(udl))
-		DRM_ERROR("Selecting channel failed\n");
 
 	if (!udl_alloc_urb_list(dev, WRITES_IN_FLIGHT, MAX_TRANSFER)) {
 		DRM_ERROR("udl_alloc_urb_list failed\n");
@@ -351,6 +328,7 @@ err_fb:
 err:
 	if (udl->urbs.count)
 		udl_free_urb_list(dev);
+	kfree(udl);
 	DRM_ERROR("%d\n", ret);
 	return ret;
 }
@@ -361,12 +339,17 @@ int udl_drop_usb(struct drm_device *dev)
 	return 0;
 }
 
-void udl_fini(struct drm_device *dev)
+int udl_driver_unload(struct drm_device *dev)
 {
-	struct udl_device *udl = to_udl(dev);
+	struct udl_device *udl = dev->dev_private;
+
+	drm_vblank_cleanup(dev);
 
 	if (udl->urbs.count)
 		udl_free_urb_list(dev);
 
 	udl_fbdev_cleanup(dev);
+	udl_modeset_cleanup(dev);
+	kfree(udl);
+	return 0;
 }

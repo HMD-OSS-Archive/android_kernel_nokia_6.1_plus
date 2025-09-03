@@ -64,17 +64,17 @@
 #define BCM2835_AUX_SPI_CNTL0_VAR_WIDTH	0x00004000
 #define BCM2835_AUX_SPI_CNTL0_DOUTHOLD	0x00003000
 #define BCM2835_AUX_SPI_CNTL0_ENABLE	0x00000800
-#define BCM2835_AUX_SPI_CNTL0_IN_RISING	0x00000400
+#define BCM2835_AUX_SPI_CNTL0_CPHA_IN	0x00000400
 #define BCM2835_AUX_SPI_CNTL0_CLEARFIFO	0x00000200
-#define BCM2835_AUX_SPI_CNTL0_OUT_RISING	0x00000100
+#define BCM2835_AUX_SPI_CNTL0_CPHA_OUT	0x00000100
 #define BCM2835_AUX_SPI_CNTL0_CPOL	0x00000080
 #define BCM2835_AUX_SPI_CNTL0_MSBF_OUT	0x00000040
 #define BCM2835_AUX_SPI_CNTL0_SHIFTLEN	0x0000003F
 
 /* Bitfields in CNTL1 */
 #define BCM2835_AUX_SPI_CNTL1_CSHIGH	0x00000700
-#define BCM2835_AUX_SPI_CNTL1_TXEMPTY	0x00000080
-#define BCM2835_AUX_SPI_CNTL1_IDLE	0x00000040
+#define BCM2835_AUX_SPI_CNTL1_IDLE	0x00000080
+#define BCM2835_AUX_SPI_CNTL1_TXEMPTY	0x00000040
 #define BCM2835_AUX_SPI_CNTL1_MSBF_IN	0x00000002
 #define BCM2835_AUX_SPI_CNTL1_KEEP_IN	0x00000001
 
@@ -91,6 +91,9 @@
 /* timeout values */
 #define BCM2835_AUX_SPI_POLLING_LIMIT_US	30
 #define BCM2835_AUX_SPI_POLLING_JIFFIES		2
+
+#define BCM2835_AUX_SPI_MODE_BITS (SPI_CPOL | SPI_CPHA | SPI_CS_HIGH \
+				  | SPI_NO_CS)
 
 struct bcm2835aux_spi {
 	void __iomem *regs;
@@ -178,24 +181,14 @@ static void bcm2835aux_spi_reset_hw(struct bcm2835aux_spi *bs)
 		      BCM2835_AUX_SPI_CNTL0_CLEARFIFO);
 }
 
-static irqreturn_t bcm2835aux_spi_interrupt(int irq, void *dev_id)
+static void bcm2835aux_spi_transfer_helper(struct bcm2835aux_spi *bs)
 {
-	struct spi_master *master = dev_id;
-	struct bcm2835aux_spi *bs = spi_master_get_devdata(master);
-	irqreturn_t ret = IRQ_NONE;
-
-	/* IRQ may be shared, so return if our interrupts are disabled */
-	if (!(bcm2835aux_rd(bs, BCM2835_AUX_SPI_CNTL1) &
-	      (BCM2835_AUX_SPI_CNTL1_TXEMPTY | BCM2835_AUX_SPI_CNTL1_IDLE)))
-		return ret;
+	u32 stat = bcm2835aux_rd(bs, BCM2835_AUX_SPI_STAT);
 
 	/* check if we have data to read */
-	while (bs->rx_len &&
-	       (!(bcm2835aux_rd(bs, BCM2835_AUX_SPI_STAT) &
-		  BCM2835_AUX_SPI_STAT_RX_EMPTY))) {
+	for (; bs->rx_len && (stat & BCM2835_AUX_SPI_STAT_RX_LVL);
+	     stat = bcm2835aux_rd(bs, BCM2835_AUX_SPI_STAT))
 		bcm2835aux_rd_fifo(bs);
-		ret = IRQ_HANDLED;
-	}
 
 	/* check if we have data to write */
 	while (bs->tx_len &&
@@ -203,31 +196,29 @@ static irqreturn_t bcm2835aux_spi_interrupt(int irq, void *dev_id)
 	       (!(bcm2835aux_rd(bs, BCM2835_AUX_SPI_STAT) &
 		  BCM2835_AUX_SPI_STAT_TX_FULL))) {
 		bcm2835aux_wr_fifo(bs);
-		ret = IRQ_HANDLED;
 	}
+}
 
-	/* and check if we have reached "done" */
-	while (bs->rx_len &&
-	       (!(bcm2835aux_rd(bs, BCM2835_AUX_SPI_STAT) &
-		  BCM2835_AUX_SPI_STAT_BUSY))) {
-		bcm2835aux_rd_fifo(bs);
-		ret = IRQ_HANDLED;
-	}
+static irqreturn_t bcm2835aux_spi_interrupt(int irq, void *dev_id)
+{
+	struct spi_master *master = dev_id;
+	struct bcm2835aux_spi *bs = spi_master_get_devdata(master);
 
-	if (!bs->tx_len) {
-		/* disable tx fifo empty interrupt */
-		bcm2835aux_wr(bs, BCM2835_AUX_SPI_CNTL1, bs->cntl[1] |
-			BCM2835_AUX_SPI_CNTL1_IDLE);
-	}
+	/* IRQ may be shared, so return if our interrupts are disabled */
+	if (!(bcm2835aux_rd(bs, BCM2835_AUX_SPI_CNTL1) &
+	      (BCM2835_AUX_SPI_CNTL1_TXEMPTY | BCM2835_AUX_SPI_CNTL1_IDLE)))
+		return IRQ_NONE;
 
-	/* and if rx_len is 0 then disable interrupts and wake up completion */
+	/* do common fifo handling */
+	bcm2835aux_spi_transfer_helper(bs);
+
+	/* and if rx_len is 0 then wake up completion and disable spi */
 	if (!bs->rx_len) {
-		bcm2835aux_wr(bs, BCM2835_AUX_SPI_CNTL1, bs->cntl[1]);
+		bcm2835aux_spi_reset_hw(bs);
 		complete(&master->xfer_completion);
 	}
 
-	/* and return */
-	return ret;
+	return IRQ_HANDLED;
 }
 
 static int __bcm2835aux_spi_transfer_one_irq(struct spi_master *master,
@@ -273,7 +264,6 @@ static int bcm2835aux_spi_transfer_one_poll(struct spi_master *master,
 {
 	struct bcm2835aux_spi *bs = spi_master_get_devdata(master);
 	unsigned long timeout;
-	u32 stat;
 
 	/* configure spi */
 	bcm2835aux_wr(bs, BCM2835_AUX_SPI_CNTL1, bs->cntl[1]);
@@ -284,24 +274,9 @@ static int bcm2835aux_spi_transfer_one_poll(struct spi_master *master,
 
 	/* loop until finished the transfer */
 	while (bs->rx_len) {
-		/* read status */
-		stat = bcm2835aux_rd(bs, BCM2835_AUX_SPI_STAT);
 
-		/* fill in tx fifo with remaining data */
-		if ((bs->tx_len) && (!(stat & BCM2835_AUX_SPI_STAT_TX_FULL))) {
-			bcm2835aux_wr_fifo(bs);
-			continue;
-		}
-
-		/* read data from fifo for both cases */
-		if (!(stat & BCM2835_AUX_SPI_STAT_RX_EMPTY)) {
-			bcm2835aux_rd_fifo(bs);
-			continue;
-		}
-		if (!(stat & BCM2835_AUX_SPI_STAT_BUSY)) {
-			bcm2835aux_rd_fifo(bs);
-			continue;
-		}
+		/* do common fifo handling */
+		bcm2835aux_spi_transfer_helper(bs);
 
 		/* there is still data pending to read check the timeout */
 		if (bs->rx_len && time_after(jiffies, timeout)) {
@@ -314,6 +289,9 @@ static int bcm2835aux_spi_transfer_one_poll(struct spi_master *master,
 							       spi, tfr);
 		}
 	}
+
+	/* Transfer complete - reset SPI HW */
+	bcm2835aux_spi_reset_hw(bs);
 
 	/* and return without waiting for completion */
 	return 0;
@@ -335,6 +313,10 @@ static int bcm2835aux_spi_transfer_one(struct spi_master *master,
 	 * resulting (potentially) in more interrupts when transferring
 	 * more than 12 bytes
 	 */
+	bs->cntl[0] = BCM2835_AUX_SPI_CNTL0_ENABLE |
+		      BCM2835_AUX_SPI_CNTL0_VAR_WIDTH |
+		      BCM2835_AUX_SPI_CNTL0_MSBF_OUT;
+	bs->cntl[1] = BCM2835_AUX_SPI_CNTL1_MSBF_IN;
 
 	/* set clock */
 	spi_hz = tfr->speed_hz;
@@ -349,12 +331,16 @@ static int bcm2835aux_spi_transfer_one(struct spi_master *master,
 	} else { /* the slowest we can go */
 		speed = BCM2835_AUX_SPI_CNTL0_SPEED_MAX;
 	}
-	/* mask out old speed from previous spi_transfer */
-	bs->cntl[0] &= ~(BCM2835_AUX_SPI_CNTL0_SPEED);
-	/* set the new speed */
 	bs->cntl[0] |= speed << BCM2835_AUX_SPI_CNTL0_SPEED_SHIFT;
 
 	spi_used_hz = clk_hz / (2 * (speed + 1));
+
+	/* handle all the modes */
+	if (spi->mode & SPI_CPOL)
+		bs->cntl[0] |= BCM2835_AUX_SPI_CNTL0_CPOL;
+	if (spi->mode & SPI_CPHA)
+		bs->cntl[0] |= BCM2835_AUX_SPI_CNTL0_CPHA_OUT |
+			       BCM2835_AUX_SPI_CNTL0_CPHA_IN;
 
 	/* set transmit buffers and length */
 	bs->tx_buf = tfr->tx_buf;
@@ -377,40 +363,6 @@ static int bcm2835aux_spi_transfer_one(struct spi_master *master,
 
 	/* run in interrupt mode for all others */
 	return bcm2835aux_spi_transfer_one_irq(master, spi, tfr);
-}
-
-static int bcm2835aux_spi_prepare_message(struct spi_master *master,
-					  struct spi_message *msg)
-{
-	struct spi_device *spi = msg->spi;
-	struct bcm2835aux_spi *bs = spi_master_get_devdata(master);
-
-	bs->cntl[0] = BCM2835_AUX_SPI_CNTL0_ENABLE |
-		      BCM2835_AUX_SPI_CNTL0_VAR_WIDTH |
-		      BCM2835_AUX_SPI_CNTL0_MSBF_OUT;
-	bs->cntl[1] = BCM2835_AUX_SPI_CNTL1_MSBF_IN;
-
-	/* handle all the modes */
-	if (spi->mode & SPI_CPOL) {
-		bs->cntl[0] |= BCM2835_AUX_SPI_CNTL0_CPOL;
-		bs->cntl[0] |= BCM2835_AUX_SPI_CNTL0_OUT_RISING;
-	} else {
-		bs->cntl[0] |= BCM2835_AUX_SPI_CNTL0_IN_RISING;
-	}
-	bcm2835aux_wr(bs, BCM2835_AUX_SPI_CNTL1, bs->cntl[1]);
-	bcm2835aux_wr(bs, BCM2835_AUX_SPI_CNTL0, bs->cntl[0]);
-
-	return 0;
-}
-
-static int bcm2835aux_spi_unprepare_message(struct spi_master *master,
-					    struct spi_message *msg)
-{
-	struct bcm2835aux_spi *bs = spi_master_get_devdata(master);
-
-	bcm2835aux_spi_reset_hw(bs);
-
-	return 0;
 }
 
 static void bcm2835aux_spi_handle_err(struct spi_master *master,
@@ -436,13 +388,11 @@ static int bcm2835aux_spi_probe(struct platform_device *pdev)
 	}
 
 	platform_set_drvdata(pdev, master);
-	master->mode_bits = (SPI_CPOL | SPI_CS_HIGH | SPI_NO_CS);
+	master->mode_bits = BCM2835_AUX_SPI_MODE_BITS;
 	master->bits_per_word_mask = SPI_BPW_MASK(8);
 	master->num_chipselect = -1;
 	master->transfer_one = bcm2835aux_spi_transfer_one;
 	master->handle_err = bcm2835aux_spi_handle_err;
-	master->prepare_message = bcm2835aux_spi_prepare_message;
-	master->unprepare_message = bcm2835aux_spi_unprepare_message;
 	master->dev.of_node = pdev->dev.of_node;
 
 	bs = spi_master_get_devdata(master);

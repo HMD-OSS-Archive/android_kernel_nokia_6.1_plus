@@ -30,7 +30,6 @@
 #include <linux/uaccess.h>
 #include <linux/version.h>
 
-#include <media/cec-pin.h>
 #include "cec-priv.h"
 
 static inline struct cec_devnode *cec_devnode_data(struct file *filp)
@@ -58,7 +57,7 @@ static unsigned int cec_poll(struct file *filp,
 		res |= POLLOUT | POLLWRNORM;
 	if (fh->queued_msgs)
 		res |= POLLIN | POLLRDNORM;
-	if (fh->total_queued_events)
+	if (fh->pending_events)
 		res |= POLLPRI;
 	poll_wait(filp, &fh->wait, poll);
 	mutex_unlock(&adap->lock);
@@ -113,23 +112,6 @@ static long cec_adap_g_phys_addr(struct cec_adapter *adap,
 	return 0;
 }
 
-static int cec_validate_phys_addr(u16 phys_addr)
-{
-	int i;
-
-	if (phys_addr == CEC_PHYS_ADDR_INVALID)
-		return 0;
-	for (i = 0; i < 16; i += 4)
-		if (phys_addr & (0xf << i))
-			break;
-	if (i == 16)
-		return 0;
-	for (i += 4; i < 16; i += 4)
-		if ((phys_addr & (0xf << i)) == 0)
-			return -EINVAL;
-	return 0;
-}
-
 static long cec_adap_s_phys_addr(struct cec_adapter *adap, struct cec_fh *fh,
 				 bool block, __u16 __user *parg)
 {
@@ -141,7 +123,7 @@ static long cec_adap_s_phys_addr(struct cec_adapter *adap, struct cec_fh *fh,
 	if (copy_from_user(&phys_addr, parg, sizeof(phys_addr)))
 		return -EFAULT;
 
-	err = cec_validate_phys_addr(phys_addr);
+	err = cec_phys_addr_validate(phys_addr, NULL, NULL);
 	if (err)
 		return err;
 	mutex_lock(&adap->lock);
@@ -216,12 +198,7 @@ static long cec_transmit(struct cec_adapter *adap, struct cec_fh *fh,
 		return -EINVAL;
 
 	mutex_lock(&adap->lock);
-	if (adap->log_addrs.num_log_addrs == 0)
-		err = -EPERM;
-	else if (adap->is_configuring)
-		err = -ENONET;
-	else if (!adap->is_configured &&
-		 (adap->needs_hpd || msg.msg[0] != 0xf0))
+	if (!adap->is_configured)
 		err = -ENONET;
 	else if (cec_is_busy(adap, fh))
 		err = -EBUSY;
@@ -290,10 +267,16 @@ static long cec_receive(struct cec_adapter *adap, struct cec_fh *fh,
 			bool block, struct cec_msg __user *parg)
 {
 	struct cec_msg msg = {};
-	long err;
+	long err = 0;
 
 	if (copy_from_user(&msg, parg, sizeof(msg)))
 		return -EFAULT;
+	mutex_lock(&adap->lock);
+	if (!adap->is_configured && fh->mode_follower < CEC_MODE_MONITOR)
+		err = -ENONET;
+	mutex_unlock(&adap->lock);
+	if (err)
+		return err;
 
 	err = cec_receive_msg(fh, &msg, block);
 	if (err)
@@ -307,17 +290,15 @@ static long cec_receive(struct cec_adapter *adap, struct cec_fh *fh,
 static long cec_dqevent(struct cec_adapter *adap, struct cec_fh *fh,
 			bool block, struct cec_event __user *parg)
 {
-	struct cec_event_entry *ev = NULL;
+	struct cec_event *ev = NULL;
 	u64 ts = ~0ULL;
 	unsigned int i;
-	unsigned int ev_idx;
 	long err = 0;
 
 	mutex_lock(&fh->lock);
-	while (!fh->total_queued_events && block) {
+	while (!fh->pending_events && block) {
 		mutex_unlock(&fh->lock);
-		err = wait_event_interruptible(fh->wait,
-					       fh->total_queued_events);
+		err = wait_event_interruptible(fh->wait, fh->pending_events);
 		if (err)
 			return err;
 		mutex_lock(&fh->lock);
@@ -325,29 +306,23 @@ static long cec_dqevent(struct cec_adapter *adap, struct cec_fh *fh,
 
 	/* Find the oldest event */
 	for (i = 0; i < CEC_NUM_EVENTS; i++) {
-		struct cec_event_entry *entry =
-			list_first_entry_or_null(&fh->events[i],
-						 struct cec_event_entry, list);
-
-		if (entry && entry->ev.ts <= ts) {
-			ev = entry;
-			ev_idx = i;
-			ts = ev->ev.ts;
+		if (fh->pending_events & (1 << (i + 1)) &&
+		    fh->events[i].ts <= ts) {
+			ev = &fh->events[i];
+			ts = ev->ts;
 		}
 	}
-
 	if (!ev) {
 		err = -EAGAIN;
 		goto unlock;
 	}
-	list_del(&ev->list);
 
-	if (copy_to_user(parg, &ev->ev, sizeof(ev->ev)))
+	if (copy_to_user(parg, ev, sizeof(*ev))) {
 		err = -EFAULT;
-	if (ev_idx >= CEC_NUM_CORE_EVENTS)
-		kfree(ev);
-	fh->queued_events[ev_idx]--;
-	fh->total_queued_events--;
+		goto unlock;
+	}
+
+	fh->pending_events &= ~(1 << ev->event);
 
 unlock:
 	mutex_unlock(&fh->lock);
@@ -374,50 +349,33 @@ static long cec_s_mode(struct cec_adapter *adap, struct cec_fh *fh,
 
 	if (copy_from_user(&mode, parg, sizeof(mode)))
 		return -EFAULT;
-	if (mode & ~(CEC_MODE_INITIATOR_MSK | CEC_MODE_FOLLOWER_MSK)) {
-		dprintk(1, "%s: invalid mode bits set\n", __func__);
+	if (mode & ~(CEC_MODE_INITIATOR_MSK | CEC_MODE_FOLLOWER_MSK))
 		return -EINVAL;
-	}
 
 	mode_initiator = mode & CEC_MODE_INITIATOR_MSK;
 	mode_follower = mode & CEC_MODE_FOLLOWER_MSK;
 
 	if (mode_initiator > CEC_MODE_EXCL_INITIATOR ||
-	    mode_follower > CEC_MODE_MONITOR_ALL) {
-		dprintk(1, "%s: unknown mode\n", __func__);
+	    mode_follower > CEC_MODE_MONITOR_ALL)
 		return -EINVAL;
-	}
 
 	if (mode_follower == CEC_MODE_MONITOR_ALL &&
-	    !(adap->capabilities & CEC_CAP_MONITOR_ALL)) {
-		dprintk(1, "%s: MONITOR_ALL not supported\n", __func__);
+	    !(adap->capabilities & CEC_CAP_MONITOR_ALL))
 		return -EINVAL;
-	}
-
-	if (mode_follower == CEC_MODE_MONITOR_PIN &&
-	    !(adap->capabilities & CEC_CAP_MONITOR_PIN)) {
-		dprintk(1, "%s: MONITOR_PIN not supported\n", __func__);
-		return -EINVAL;
-	}
 
 	/* Follower modes should always be able to send CEC messages */
 	if ((mode_initiator == CEC_MODE_NO_INITIATOR ||
 	     !(adap->capabilities & CEC_CAP_TRANSMIT)) &&
 	    mode_follower >= CEC_MODE_FOLLOWER &&
-	    mode_follower <= CEC_MODE_EXCL_FOLLOWER_PASSTHRU) {
-		dprintk(1, "%s: cannot transmit\n", __func__);
+	    mode_follower <= CEC_MODE_EXCL_FOLLOWER_PASSTHRU)
 		return -EINVAL;
-	}
 
 	/* Monitor modes require CEC_MODE_NO_INITIATOR */
-	if (mode_initiator && mode_follower >= CEC_MODE_MONITOR_PIN) {
-		dprintk(1, "%s: monitor modes require NO_INITIATOR\n",
-			__func__);
+	if (mode_initiator && mode_follower >= CEC_MODE_MONITOR)
 		return -EINVAL;
-	}
 
 	/* Monitor modes require CAP_NET_ADMIN */
-	if (mode_follower >= CEC_MODE_MONITOR_PIN && !capable(CAP_NET_ADMIN))
+	if (mode_follower >= CEC_MODE_MONITOR && !capable(CAP_NET_ADMIN))
 		return -EPERM;
 
 	mutex_lock(&adap->lock);
@@ -456,20 +414,8 @@ static long cec_s_mode(struct cec_adapter *adap, struct cec_fh *fh,
 
 	if (fh->mode_follower == CEC_MODE_FOLLOWER)
 		adap->follower_cnt--;
-	if (fh->mode_follower == CEC_MODE_MONITOR_PIN)
-		adap->monitor_pin_cnt--;
 	if (mode_follower == CEC_MODE_FOLLOWER)
 		adap->follower_cnt++;
-	if (mode_follower == CEC_MODE_MONITOR_PIN) {
-		struct cec_event ev = {
-			.flags = CEC_EVENT_FL_INITIAL_STATE,
-		};
-
-		ev.event = adap->cec_pin_is_high ? CEC_EVENT_PIN_CEC_HIGH :
-						   CEC_EVENT_PIN_CEC_LOW;
-		cec_queue_event_fh(fh, &ev, 0);
-		adap->monitor_pin_cnt++;
-	}
 	if (mode_follower == CEC_MODE_EXCL_FOLLOWER ||
 	    mode_follower == CEC_MODE_EXCL_FOLLOWER_PASSTHRU) {
 		adap->passthrough =
@@ -550,7 +496,6 @@ static int cec_open(struct inode *inode, struct file *filp)
 		.event = CEC_EVENT_STATE_CHANGE,
 		.flags = CEC_EVENT_FL_INITIAL_STATE,
 	};
-	unsigned int i;
 	int err;
 
 	if (!fh)
@@ -558,8 +503,6 @@ static int cec_open(struct inode *inode, struct file *filp)
 
 	INIT_LIST_HEAD(&fh->msgs);
 	INIT_LIST_HEAD(&fh->xfer_list);
-	for (i = 0; i < CEC_NUM_EVENTS; i++)
-		INIT_LIST_HEAD(&fh->events[i]);
 	mutex_init(&fh->lock);
 	init_waitqueue_head(&fh->wait);
 
@@ -572,19 +515,9 @@ static int cec_open(struct inode *inode, struct file *filp)
 		return err;
 	}
 
-	mutex_lock(&devnode->lock);
-	if (list_empty(&devnode->fhs) &&
-	    !adap->needs_hpd &&
-	    adap->phys_addr == CEC_PHYS_ADDR_INVALID) {
-		err = adap->ops->adap_enable(adap, true);
-		if (err) {
-			mutex_unlock(&devnode->lock);
-			kfree(fh);
-			return err;
-		}
-	}
 	filp->private_data = fh;
 
+	mutex_lock(&devnode->lock);
 	/* Queue up initial state events */
 	ev_state.state_change.phys_addr = adap->phys_addr;
 	ev_state.state_change.log_addr_mask = adap->log_addrs.log_addr_mask;
@@ -602,7 +535,6 @@ static int cec_release(struct inode *inode, struct file *filp)
 	struct cec_devnode *devnode = cec_devnode_data(filp);
 	struct cec_adapter *adap = to_cec_adapter(devnode);
 	struct cec_fh *fh = filp->private_data;
-	unsigned int i;
 
 	mutex_lock(&adap->lock);
 	if (adap->cec_initiator == fh)
@@ -613,19 +545,12 @@ static int cec_release(struct inode *inode, struct file *filp)
 	}
 	if (fh->mode_follower == CEC_MODE_FOLLOWER)
 		adap->follower_cnt--;
-	if (fh->mode_follower == CEC_MODE_MONITOR_PIN)
-		adap->monitor_pin_cnt--;
 	if (fh->mode_follower == CEC_MODE_MONITOR_ALL)
 		cec_monitor_all_cnt_dec(adap);
 	mutex_unlock(&adap->lock);
 
 	mutex_lock(&devnode->lock);
 	list_del(&fh->list);
-	if (list_empty(&devnode->fhs) &&
-	    !adap->needs_hpd &&
-	    adap->phys_addr == CEC_PHYS_ADDR_INVALID) {
-		WARN_ON(adap->ops->adap_enable(adap, false));
-	}
 	mutex_unlock(&devnode->lock);
 
 	/* Unhook pending transmits from this filehandle. */
@@ -645,16 +570,6 @@ static int cec_release(struct inode *inode, struct file *filp)
 
 		list_del(&entry->list);
 		kfree(entry);
-	}
-	for (i = CEC_NUM_CORE_EVENTS; i < CEC_NUM_EVENTS; i++) {
-		while (!list_empty(&fh->events[i])) {
-			struct cec_event_entry *entry =
-				list_first_entry(&fh->events[i],
-						 struct cec_event_entry, list);
-
-			list_del(&entry->list);
-			kfree(entry);
-		}
 	}
 	kfree(fh);
 

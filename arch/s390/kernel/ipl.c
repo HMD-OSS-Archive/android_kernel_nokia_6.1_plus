@@ -8,8 +8,7 @@
  */
 
 #include <linux/types.h>
-#include <linux/export.h>
-#include <linux/init.h>
+#include <linux/module.h>
 #include <linux/device.h>
 #include <linux/delay.h>
 #include <linux/reboot.h>
@@ -122,9 +121,9 @@ static char *dump_type_str(enum dump_type type)
  * Must be in data section since the bss section
  * is not cleared when these are accessed.
  */
-static u8 ipl_ssid __section(.data) = 0;
-static u16 ipl_devno __section(.data) = 0;
-u32 ipl_flags __section(.data) = 0;
+static u8 ipl_ssid __attribute__((__section__(".data"))) = 0;
+static u16 ipl_devno __attribute__((__section__(".data"))) = 0;
+u32 ipl_flags __attribute__((__section__(".data"))) = 0;
 
 enum ipl_method {
 	REIPL_METHOD_CCW_CIO,
@@ -175,7 +174,7 @@ static inline int __diag308(unsigned long subcode, void *addr)
 
 	asm volatile(
 		"	diag	%0,%2,0x308\n"
-		"0:	nopr	%%r7\n"
+		"0:\n"
 		EX_TABLE(0b,0b)
 		: "+d" (_addr), "+d" (_rc)
 		: "d" (subcode) : "cc", "memory");
@@ -565,7 +564,7 @@ static struct kset *ipl_kset;
 static void __ipl_run(void *unused)
 {
 	__bpon();
-	diag308(DIAG308_LOAD_CLEAR, NULL);
+	diag308(DIAG308_IPL, NULL);
 	if (MACHINE_IS_VM)
 		__cpcmd("IPL", NULL, 0, NULL);
 	else if (ipl_info.type == IPL_TYPE_CCW)
@@ -1088,21 +1087,21 @@ static void __reipl_run(void *unused)
 		break;
 	case REIPL_METHOD_CCW_DIAG:
 		diag308(DIAG308_SET, reipl_block_ccw);
-		diag308(DIAG308_LOAD_CLEAR, NULL);
+		diag308(DIAG308_IPL, NULL);
 		break;
 	case REIPL_METHOD_FCP_RW_DIAG:
 		diag308(DIAG308_SET, reipl_block_fcp);
-		diag308(DIAG308_LOAD_CLEAR, NULL);
+		diag308(DIAG308_IPL, NULL);
 		break;
 	case REIPL_METHOD_FCP_RO_DIAG:
-		diag308(DIAG308_LOAD_CLEAR, NULL);
+		diag308(DIAG308_IPL, NULL);
 		break;
 	case REIPL_METHOD_FCP_RO_VM:
 		__cpcmd("IPL", NULL, 0, NULL);
 		break;
 	case REIPL_METHOD_NSS_DIAG:
 		diag308(DIAG308_SET, reipl_block_nss);
-		diag308(DIAG308_LOAD_CLEAR, NULL);
+		diag308(DIAG308_IPL, NULL);
 		break;
 	case REIPL_METHOD_NSS:
 		get_ipl_string(buf, reipl_block_nss, REIPL_METHOD_NSS);
@@ -1111,7 +1110,7 @@ static void __reipl_run(void *unused)
 	case REIPL_METHOD_DEFAULT:
 		if (MACHINE_IS_VM)
 			__cpcmd("IPL", NULL, 0, NULL);
-		diag308(DIAG308_LOAD_CLEAR, NULL);
+		diag308(DIAG308_IPL, NULL);
 		break;
 	case REIPL_METHOD_FCP_DUMP:
 		break;
@@ -1426,7 +1425,7 @@ static void diag308_dump(void *dump_block)
 {
 	diag308(DIAG308_SET, dump_block);
 	while (1) {
-		if (diag308(DIAG308_LOAD_NORMAL_DUMP, NULL) != 0x302)
+		if (diag308(DIAG308_DUMP, NULL) != 0x302)
 			break;
 		udelay_simple(USEC_PER_SEC);
 	}
@@ -1546,8 +1545,7 @@ static void dump_reipl_run(struct shutdown_trigger *trigger)
 	unsigned long ipib = (unsigned long) reipl_block_actual;
 	unsigned int csum;
 
-	csum = (__force unsigned int)
-	       csum_partial(reipl_block_actual, reipl_block_actual->hdr.len, 0);
+	csum = csum_partial(reipl_block_actual, reipl_block_actual->hdr.len, 0);
 	mem_assign_absolute(S390_lowcore.ipib, ipib);
 	mem_assign_absolute(S390_lowcore.ipib_checksum, csum);
 	dump_run(trigger);
@@ -1864,7 +1862,7 @@ static int __init s390_ipl_init(void)
 {
 	char str[8] = {0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40};
 
-	sclp_early_get_ipl_info(&sclp_ipl_info);
+	sclp_get_ipl_info(&sclp_ipl_info);
 	/*
 	 * Fix loadparm: There are systems where the (SCSI) LOADPARM
 	 * returned by read SCP info is invalid (contains EBCDIC blanks)
@@ -1992,9 +1990,10 @@ void __init ipl_update_parameters(void)
 		diag308_set_works = 1;
 }
 
-void __init ipl_verify_parameters(void)
+void __init ipl_save_parameters(void)
 {
 	struct cio_iplinfo iplinfo;
+	void *src, *dst;
 
 	if (cio_get_iplinfo(&iplinfo))
 		return;
@@ -2005,6 +2004,10 @@ void __init ipl_verify_parameters(void)
 	if (!iplinfo.is_qdio)
 		return;
 	ipl_flags |= IPL_PARMBLOCK_VALID;
+	src = (void *)(unsigned long)S390_lowcore.ipl_parmblock_ptr;
+	dst = (void *)IPL_PARMBLOCK_ORIGIN;
+	memmove(dst, src, PAGE_SIZE);
+	S390_lowcore.ipl_parmblock_ptr = IPL_PARMBLOCK_ORIGIN;
 }
 
 static LIST_HEAD(rcall);
@@ -2038,14 +2041,20 @@ static void do_reset_calls(void)
 		reset->fn();
 }
 
-void s390_reset_system(void)
-{
-	struct lowcore *lc;
+u32 dump_prefix_page;
 
-	lc = (struct lowcore *)(unsigned long) store_prefix();
+void s390_reset_system(void (*fn_pre)(void),
+		       void (*fn_post)(void *), void *data)
+{
+	struct _lowcore *lc;
+
+	lc = (struct _lowcore *)(unsigned long) store_prefix();
 
 	/* Stack for interrupt/machine check handler */
 	lc->panic_stack = S390_lowcore.panic_stack;
+
+	/* Save prefix page address for dump case */
+	dump_prefix_page = (u32)(unsigned long) lc;
 
 	/* Disable prefixing */
 	set_prefix(0);
@@ -2056,12 +2065,21 @@ void s390_reset_system(void)
 	/* Set new machine check handler */
 	S390_lowcore.mcck_new_psw.mask = PSW_KERNEL_BITS | PSW_MASK_DAT;
 	S390_lowcore.mcck_new_psw.addr =
-		(unsigned long) s390_base_mcck_handler;
+		PSW_ADDR_AMODE | (unsigned long) s390_base_mcck_handler;
 
 	/* Set new program check handler */
 	S390_lowcore.program_new_psw.mask = PSW_KERNEL_BITS | PSW_MASK_DAT;
 	S390_lowcore.program_new_psw.addr =
-		(unsigned long) s390_base_pgm_handler;
+		PSW_ADDR_AMODE | (unsigned long) s390_base_pgm_handler;
 
+	/* Store status at absolute zero */
+	store_status();
+
+	/* Call function before reset */
+	if (fn_pre)
+		fn_pre();
 	do_reset_calls();
+	/* Call function after reset */
+	if (fn_post)
+		fn_post(data);
 }

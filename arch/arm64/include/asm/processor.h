@@ -19,13 +19,6 @@
 #ifndef __ASM_PROCESSOR_H
 #define __ASM_PROCESSOR_H
 
-#define TASK_SIZE_64		(UL(1) << VA_BITS)
-
-#define KERNEL_DS	UL(-1)
-#define USER_DS		(TASK_SIZE_64 - 1)
-
-#ifndef __ASSEMBLY__
-
 /*
  * Default implementation of macro that returns current
  * instruction pointer ("program counter").
@@ -44,30 +37,7 @@
 #include <asm/ptrace.h>
 #include <asm/types.h>
 
-/*
- * TASK_SIZE - the maximum size of a user space task.
- * TASK_UNMAPPED_BASE - the lower boundary of the mmap VM area.
- */
-#ifdef CONFIG_COMPAT
-#ifdef CONFIG_ARM64_64K_PAGES
-/*
- * With CONFIG_ARM64_64K_PAGES enabled, the last page is occupied
- * by the compat vectors page.
- */
-#define TASK_SIZE_32		UL(0x100000000)
-#else
-#define TASK_SIZE_32		(UL(0x100000000) - PAGE_SIZE)
-#endif /* CONFIG_ARM64_64K_PAGES */
-#define TASK_SIZE		(test_thread_flag(TIF_32BIT) ? \
-				TASK_SIZE_32 : TASK_SIZE_64)
-#define TASK_SIZE_OF(tsk)	(test_tsk_thread_flag(tsk, TIF_32BIT) ? \
-				TASK_SIZE_32 : TASK_SIZE_64)
-#else
-#define TASK_SIZE		TASK_SIZE_64
-#endif /* CONFIG_COMPAT */
-
-#define TASK_UNMAPPED_BASE	(PAGE_ALIGN(TASK_SIZE / 4))
-
+#ifdef __KERNEL__
 #define STACK_TOP_MAX		TASK_SIZE_64
 #ifdef CONFIG_COMPAT
 #define AARCH32_VECTORS_BASE	0xffff0000
@@ -79,9 +49,12 @@
 
 extern phys_addr_t arm64_dma_phys_limit;
 #define ARCH_LOW_ADDRESS_LIMIT	(arm64_dma_phys_limit - 1)
+#endif /* __KERNEL__ */
+
+extern unsigned int boot_reason;
+extern unsigned int cold_boot;
 
 struct debug_info {
-#ifdef CONFIG_HAVE_HW_BREAKPOINT
 	/* Have we suspended stepping by a debugger? */
 	int			suspended_step;
 	/* Allow breakpoints and watchpoints to be disabled for this thread. */
@@ -90,7 +63,6 @@ struct debug_info {
 	/* Hardware breakpoints pinned to this task. */
 	struct perf_event	*hbp_break[ARM_MAX_BRP];
 	struct perf_event	*hbp_watch[ARM_MAX_WRP];
-#endif
 };
 
 struct cpu_context {
@@ -135,26 +107,13 @@ struct thread_struct {
 #define task_user_tls(t)	(&(t)->thread.tp_value)
 #endif
 
-/* Sync TPIDR_EL0 back to thread_struct for current */
-void tls_preserve_current_state(void);
-
 #define INIT_THREAD  {	}
 
 static inline void start_thread_common(struct pt_regs *regs, unsigned long pc)
 {
 	memset(regs, 0, sizeof(*regs));
-	forget_syscall(regs);
+	regs->syscallno = ~0UL;
 	regs->pc = pc;
-}
-
-static inline void set_ssbs_bit(struct pt_regs *regs)
-{
-	regs->pstate |= PSR_SSBS_BIT;
-}
-
-static inline void set_compat_ssbs_bit(struct pt_regs *regs)
-{
-	regs->pstate |= PSR_AA32_SSBS_BIT;
 }
 
 static inline void start_thread(struct pt_regs *regs, unsigned long pc,
@@ -162,10 +121,6 @@ static inline void start_thread(struct pt_regs *regs, unsigned long pc,
 {
 	start_thread_common(regs, pc);
 	regs->pstate = PSR_MODE_EL0t;
-
-	if (arm64_get_ssbd_state() != ARM64_SSBD_FORCE_ENABLE)
-		set_ssbs_bit(regs);
-
 	regs->sp = sp;
 }
 
@@ -181,9 +136,6 @@ static inline void compat_start_thread(struct pt_regs *regs, unsigned long pc,
 #ifdef __AARCH64EB__
 	regs->pstate |= COMPAT_PSR_E_BIT;
 #endif
-
-	if (arm64_get_ssbd_state() != ARM64_SSBD_FORCE_ENABLE)
-		set_compat_ssbs_bit(regs);
 
 	regs->compat_sp = sp;
 }
@@ -202,12 +154,14 @@ static inline void cpu_relax(void)
 	asm volatile("yield" ::: "memory");
 }
 
+#define cpu_relax_lowlatency()                cpu_relax()
+
 /* Thread switching */
 extern struct task_struct *cpu_switch_to(struct task_struct *prev,
 					 struct task_struct *next);
 
 #define task_pt_regs(p) \
-	((struct pt_regs *)(THREAD_SIZE + task_stack_page(p)) - 1)
+	((struct pt_regs *)(THREAD_START_SP + task_stack_page(p)) - 1)
 
 #define KSTK_EIP(tsk)	((unsigned long)task_pt_regs(tsk)->pc)
 #define KSTK_ESP(tsk)	user_stack_pointer(task_pt_regs(tsk))
@@ -240,7 +194,6 @@ static inline void spin_lock_prefetch(const void *ptr)
 #endif
 
 int cpu_enable_pan(void *__unused);
-int cpu_enable_cache_maint_trap(void *__unused);
+int cpu_enable_uao(void *__unused);
 
-#endif /* __ASSEMBLY__ */
 #endif /* __ASM_PROCESSOR_H */

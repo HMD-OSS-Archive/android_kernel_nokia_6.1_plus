@@ -17,6 +17,7 @@
 #include <linux/io.h>
 #include <linux/init.h>
 #include <linux/clk.h>
+#include <linux/module.h>
 #include <linux/err.h>
 #include <linux/errno.h>
 #include <linux/ioport.h>
@@ -43,9 +44,14 @@ struct mb86s70_gpio_chip {
 	spinlock_t lock;
 };
 
+static inline struct mb86s70_gpio_chip *chip_to_mb86s70(struct gpio_chip *gc)
+{
+	return container_of(gc, struct mb86s70_gpio_chip, gc);
+}
+
 static int mb86s70_gpio_request(struct gpio_chip *gc, unsigned gpio)
 {
-	struct mb86s70_gpio_chip *gchip = gpiochip_get_data(gc);
+	struct mb86s70_gpio_chip *gchip = chip_to_mb86s70(gc);
 	unsigned long flags;
 	u32 val;
 
@@ -67,7 +73,7 @@ static int mb86s70_gpio_request(struct gpio_chip *gc, unsigned gpio)
 
 static void mb86s70_gpio_free(struct gpio_chip *gc, unsigned gpio)
 {
-	struct mb86s70_gpio_chip *gchip = gpiochip_get_data(gc);
+	struct mb86s70_gpio_chip *gchip = chip_to_mb86s70(gc);
 	unsigned long flags;
 	u32 val;
 
@@ -82,7 +88,7 @@ static void mb86s70_gpio_free(struct gpio_chip *gc, unsigned gpio)
 
 static int mb86s70_gpio_direction_input(struct gpio_chip *gc, unsigned gpio)
 {
-	struct mb86s70_gpio_chip *gchip = gpiochip_get_data(gc);
+	struct mb86s70_gpio_chip *gchip = chip_to_mb86s70(gc);
 	unsigned long flags;
 	unsigned char val;
 
@@ -100,7 +106,7 @@ static int mb86s70_gpio_direction_input(struct gpio_chip *gc, unsigned gpio)
 static int mb86s70_gpio_direction_output(struct gpio_chip *gc,
 					 unsigned gpio, int value)
 {
-	struct mb86s70_gpio_chip *gchip = gpiochip_get_data(gc);
+	struct mb86s70_gpio_chip *gchip = chip_to_mb86s70(gc);
 	unsigned long flags;
 	unsigned char val;
 
@@ -124,14 +130,14 @@ static int mb86s70_gpio_direction_output(struct gpio_chip *gc,
 
 static int mb86s70_gpio_get(struct gpio_chip *gc, unsigned gpio)
 {
-	struct mb86s70_gpio_chip *gchip = gpiochip_get_data(gc);
+	struct mb86s70_gpio_chip *gchip = chip_to_mb86s70(gc);
 
 	return !!(readl(gchip->base + PDR(gpio)) & OFFSET(gpio));
 }
 
 static void mb86s70_gpio_set(struct gpio_chip *gc, unsigned gpio, int value)
 {
-	struct mb86s70_gpio_chip *gchip = gpiochip_get_data(gc);
+	struct mb86s70_gpio_chip *gchip = chip_to_mb86s70(gc);
 	unsigned long flags;
 	unsigned char val;
 
@@ -168,9 +174,7 @@ static int mb86s70_gpio_probe(struct platform_device *pdev)
 	if (IS_ERR(gchip->clk))
 		return PTR_ERR(gchip->clk);
 
-	ret = clk_prepare_enable(gchip->clk);
-	if (ret)
-		return ret;
+	clk_prepare_enable(gchip->clk);
 
 	spin_lock_init(&gchip->lock);
 
@@ -183,10 +187,12 @@ static int mb86s70_gpio_probe(struct platform_device *pdev)
 	gchip->gc.label = dev_name(&pdev->dev);
 	gchip->gc.ngpio = 32;
 	gchip->gc.owner = THIS_MODULE;
-	gchip->gc.parent = &pdev->dev;
+	gchip->gc.dev = &pdev->dev;
 	gchip->gc.base = -1;
 
-	ret = gpiochip_add_data(&gchip->gc, gchip);
+	platform_set_drvdata(pdev, gchip);
+
+	ret = gpiochip_add(&gchip->gc);
 	if (ret) {
 		dev_err(&pdev->dev, "couldn't register gpio driver\n");
 		clk_disable_unprepare(gchip->clk);
@@ -209,6 +215,7 @@ static const struct of_device_id mb86s70_gpio_dt_ids[] = {
 	{ .compatible = "fujitsu,mb86s70-gpio" },
 	{ /* sentinel */ }
 };
+MODULE_DEVICE_TABLE(of, mb86s70_gpio_dt_ids);
 
 static struct platform_driver mb86s70_gpio_driver = {
 	.driver = {
@@ -219,4 +226,12 @@ static struct platform_driver mb86s70_gpio_driver = {
 	.remove = mb86s70_gpio_remove,
 };
 
-builtin_platform_driver(mb86s70_gpio_driver);
+static int __init mb86s70_gpio_init(void)
+{
+	return platform_driver_register(&mb86s70_gpio_driver);
+}
+module_init(mb86s70_gpio_init);
+
+MODULE_DESCRIPTION("MB86S7x GPIO Driver");
+MODULE_ALIAS("platform:mb86s70-gpio");
+MODULE_LICENSE("GPL");

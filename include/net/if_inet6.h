@@ -17,7 +17,6 @@
 
 #include <net/snmp.h>
 #include <linux/ipv6.h>
-#include <linux/refcount.h>
 
 /* inet6_dev.if_flags */
 
@@ -26,7 +25,6 @@
 #define IF_RA_RCVD	0x20
 #define IF_RS_SENT	0x10
 #define IF_READY	0x80000000
-#define IF_RS_VZW_SENT 0x01  /*add for VzW feature*/
 
 /* prefix flags */
 #define IF_PREFIX_ONLINK	0x01
@@ -47,7 +45,7 @@ struct inet6_ifaddr {
 	/* In seconds, relative to tstamp. Expiry is at tstamp + HZ * lft. */
 	__u32			valid_lft;
 	__u32			prefered_lft;
-	refcount_t		refcnt;
+	atomic_t		refcnt;
 	spinlock_t		lock;
 
 	int			state;
@@ -57,7 +55,6 @@ struct inet6_ifaddr {
 	__u8			stable_privacy_retry;
 
 	__u16			scope;
-	__u64			dad_nonce;
 
 	unsigned long		cstamp;	/* created timestamp */
 	unsigned long		tstamp; /* updated timestamp */
@@ -128,7 +125,7 @@ struct ifmcaddr6 {
 	struct timer_list	mca_timer;
 	unsigned int		mca_flags;
 	int			mca_users;
-	refcount_t		mca_refcnt;
+	atomic_t		mca_refcnt;
 	spinlock_t		mca_lock;
 	unsigned long		mca_cstamp;
 	unsigned long		mca_tstamp;
@@ -148,7 +145,7 @@ struct ifacaddr6 {
 	struct rt6_info		*aca_rt;
 	struct ifacaddr6	*aca_next;
 	int			aca_users;
-	refcount_t		aca_refcnt;
+	atomic_t		aca_refcnt;
 	unsigned long		aca_cstamp;
 	unsigned long		aca_tstamp;
 };
@@ -189,12 +186,12 @@ struct inet6_dev {
 
 	struct ifacaddr6	*ac_list;
 	rwlock_t		lock;
-	refcount_t		refcnt;
+	atomic_t		refcnt;
 	__u32			if_flags;
 	int			dead;
 
-	u32			desync_factor;
 	u8			rndid[8];
+	struct timer_list	regen_timer;
 	struct list_head	tempaddr_list;
 
 	struct in6_addr		token;
@@ -207,6 +204,7 @@ struct inet6_dev {
 	__s32			rs_interval;	/* in jiffies */
 	__u8			rs_probes;
 
+	__u8			addr_gen_mode;
 	unsigned long		tstamp; /* ipv6InterfaceTable update timestamp */
 	struct rcu_head		rcu;
 };

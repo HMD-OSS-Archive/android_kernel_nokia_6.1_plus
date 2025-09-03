@@ -24,11 +24,10 @@
 #include <linux/proc_fs.h>
 #include <linux/profile.h>
 #include <linux/rtmutex.h>
-#include <linux/sched/cputime.h>
+#include <linux/sched.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
-
 
 #define UID_HASH_BITS	10
 DECLARE_HASHTABLE(hash_table, UID_HASH_BITS);
@@ -66,10 +65,10 @@ struct task_entry {
 
 struct uid_entry {
 	uid_t uid;
-	u64 utime;
-	u64 stime;
-	u64 active_utime;
-	u64 active_stime;
+	cputime_t utime;
+	cputime_t stime;
+	cputime_t active_utime;
+	cputime_t active_stime;
 	int state;
 	struct io_stats io[UID_STATE_SIZE];
 	struct hlist_node hash;
@@ -334,8 +333,8 @@ static int uid_cputime_show(struct seq_file *m, void *v)
 	struct uid_entry *uid_entry = NULL;
 	struct task_struct *task, *temp;
 	struct user_namespace *user_ns = current_user_ns();
-	u64 utime;
-	u64 stime;
+	cputime_t utime;
+	cputime_t stime;
 	unsigned long bkt;
 	uid_t uid;
 
@@ -365,12 +364,15 @@ static int uid_cputime_show(struct seq_file *m, void *v)
 	rcu_read_unlock();
 
 	hash_for_each(hash_table, bkt, uid_entry, hash) {
-		u64 total_utime = uid_entry->utime +
+		cputime_t total_utime = uid_entry->utime +
 							uid_entry->active_utime;
-		u64 total_stime = uid_entry->stime +
+		cputime_t total_stime = uid_entry->stime +
 							uid_entry->active_stime;
 		seq_printf(m, "%d: %llu %llu\n", uid_entry->uid,
-			ktime_to_ms(total_utime), ktime_to_ms(total_stime));
+			(unsigned long long)jiffies_to_msecs(
+				cputime_to_jiffies(total_utime)) * USEC_PER_MSEC,
+			(unsigned long long)jiffies_to_msecs(
+				cputime_to_jiffies(total_stime)) * USEC_PER_MSEC);
 	}
 
 	rt_mutex_unlock(&uid_lock);
@@ -420,9 +422,6 @@ static ssize_t uid_remove_write(struct file *file,
 		kstrtol(end_uid, 10, &uid_end) != 0) {
 		return -EINVAL;
 	}
-
-	if (uid_start >= INT_MAX || uid_end >= INT_MAX)
-		return -EINVAL;
 
 	/* Also remove uids from /proc/uid_time_in_state */
 	cpufreq_task_times_remove_uids(uid_start, uid_end);
@@ -627,7 +626,7 @@ static int process_notifier(struct notifier_block *self,
 {
 	struct task_struct *task = v;
 	struct uid_entry *uid_entry;
-	u64 utime, stime;
+	cputime_t utime, stime;
 	uid_t uid;
 
 	if (!task)

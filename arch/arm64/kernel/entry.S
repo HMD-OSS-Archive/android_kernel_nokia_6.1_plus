@@ -18,7 +18,6 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <linux/arm-smccc.h>
 #include <linux/init.h>
 #include <linux/linkage.h>
 
@@ -31,9 +30,9 @@
 #include <asm/irq.h>
 #include <asm/memory.h>
 #include <asm/mmu.h>
-#include <asm/processor.h>
 #include <asm/ptrace.h>
 #include <asm/thread_info.h>
+#include <asm/uaccess.h>
 #include <asm/asm-uaccess.h>
 #include <asm/unistd.h>
 
@@ -88,73 +87,12 @@ alternative_else_nop_endif
 #endif
 
 	sub	sp, sp, #S_FRAME_SIZE
-#ifdef CONFIG_VMAP_STACK
-	/*
-	 * Test whether the SP has overflowed, without corrupting a GPR.
-	 * Task and IRQ stacks are aligned to (1 << THREAD_SHIFT).
-	 */
-	add	sp, sp, x0			// sp' = sp + x0
-	sub	x0, sp, x0			// x0' = sp' - x0 = (sp + x0) - x0 = sp
-	tbnz	x0, #THREAD_SHIFT, 0f
-	sub	x0, sp, x0			// x0'' = sp' - x0' = (sp + x0) - sp = x0
-	sub	sp, sp, x0			// sp'' = sp' - x0 = (sp + x0) - x0 = sp
-	b	el\()\el\()_\label
-
-0:
-	/*
-	 * Either we've just detected an overflow, or we've taken an exception
-	 * while on the overflow stack. Either way, we won't return to
-	 * userspace, and can clobber EL0 registers to free up GPRs.
-	 */
-
-	/* Stash the original SP (minus S_FRAME_SIZE) in tpidr_el0. */
-	msr	tpidr_el0, x0
-
-	/* Recover the original x0 value and stash it in tpidrro_el0 */
-	sub	x0, sp, x0
-	msr	tpidrro_el0, x0
-
-	/* Switch to the overflow stack */
-	adr_this_cpu sp, overflow_stack + OVERFLOW_STACK_SIZE, x0
-
-	/*
-	 * Check whether we were already on the overflow stack. This may happen
-	 * after panic() re-enables interrupts.
-	 */
-	mrs	x0, tpidr_el0			// sp of interrupted context
-	sub	x0, sp, x0			// delta with top of overflow stack
-	tst	x0, #~(OVERFLOW_STACK_SIZE - 1)	// within range?
-	b.ne	__bad_stack			// no? -> bad stack pointer
-
-	/* We were already on the overflow stack. Restore sp/x0 and carry on. */
-	sub	sp, sp, x0
-	mrs	x0, tpidrro_el0
-#endif
 	b	el\()\el\()_\label
 	.endm
 
 	.macro tramp_alias, dst, sym
 	mov_q	\dst, TRAMP_VALIAS
 	add	\dst, \dst, #(\sym - .entry.tramp.text)
-	.endm
-
-	// This macro corrupts x0-x3. It is the caller's duty
-	// to save/restore them if required.
-	.macro	apply_ssbd, state, targ, tmp1, tmp2
-#ifdef CONFIG_ARM64_SSBD
-alternative_cb	arm64_enable_wa2_handling
-	b	\targ
-alternative_cb_end
-	ldr_this_cpu	\tmp2, arm64_ssbd_callback_required, \tmp1
-	cbz	\tmp2, \targ
-	ldr	\tmp2, [tsk, #TSK_TI_FLAGS]
-	tbnz	\tmp2, #TIF_SSBD, \targ
-	mov	w0, #ARM_SMCCC_ARCH_WORKAROUND_2
-	mov	w1, #\state
-alternative_cb	arm64_update_smccc_conduit
-	nop					// Patched to SMC/HVC #0
-alternative_cb_end
-#endif
 	.endm
 
 	.macro	kernel_entry, el, regsize = 64
@@ -179,44 +117,38 @@ alternative_cb_end
 
 	.if	\el == 0
 	mrs	x21, sp_el0
+#ifdef CONFIG_THREAD_INFO_IN_TASK
 	ldr_this_cpu	tsk, __entry_task, x20	// Ensure MDSCR_EL1.SS is clear,
 	ldr	x19, [tsk, #TSK_TI_FLAGS]	// since we can unmask debug
-	disable_step_tsk x19, x20		// exceptions when scheduling.
-
-	apply_ssbd 1, 1f, x22, x23
-
-#ifdef CONFIG_ARM64_SSBD
-	ldp	x0, x1, [sp, #16 * 0]
-	ldp	x2, x3, [sp, #16 * 1]
+#else
+	mov	tsk, sp
+	and	tsk, tsk, #~(THREAD_SIZE - 1)	// Ensure MDSCR_EL1.SS is clear,
+	ldr	x19, [tsk, #TI_FLAGS]		// since we can unmask debug
 #endif
-1:
+	disable_step_tsk x19, x20		// exceptions when scheduling.
 
 	mov	x29, xzr			// fp pointed to user-space
 	.else
 	add	x21, sp, #S_FRAME_SIZE
 	get_thread_info tsk
-	/* Save the task's original addr_limit and set USER_DS */
+	/* Save the task's original addr_limit and set USER_DS (TASK_SIZE_64) */
+#ifdef CONFIG_THREAD_INFO_IN_TASK
 	ldr	x20, [tsk, #TSK_TI_ADDR_LIMIT]
+#else
+	ldr	x20, [tsk, #TI_ADDR_LIMIT]
+#endif
 	str	x20, [sp, #S_ORIG_ADDR_LIMIT]
-	mov	x20, #USER_DS
+	mov	x20, #TASK_SIZE_64
+#ifdef CONFIG_THREAD_INFO_IN_TASK
 	str	x20, [tsk, #TSK_TI_ADDR_LIMIT]
-	/* No need to reset PSTATE.UAO, hardware's already set it to 0 for us */
+#else
+	str	x20, [tsk, #TI_ADDR_LIMIT]
+#endif
+	ALTERNATIVE(nop, SET_PSTATE_UAO(0), ARM64_HAS_UAO, CONFIG_ARM64_UAO)
 	.endif /* \el == 0 */
 	mrs	x22, elr_el1
 	mrs	x23, spsr_el1
 	stp	lr, x21, [sp, #S_LR]
-
-	/*
-	 * In order to be able to dump the contents of struct pt_regs at the
-	 * time the exception was taken (in case we attempt to walk the call
-	 * stack later), chain it together with the stack frames.
-	 */
-	.if \el == 0
-	stp	xzr, xzr, [sp, #S_STACKFRAME]
-	.else
-	stp	x29, x22, [sp, #S_STACKFRAME]
-	.endif
-	add	x29, sp, #S_STACKFRAME
 
 #ifdef CONFIG_ARM64_SW_TTBR0_PAN
 	/*
@@ -245,10 +177,12 @@ alternative_else_nop_endif
 
 	stp	x22, x23, [sp, #S_PC]
 
-	/* Not in a syscall by default (el0_svc overwrites for real syscall) */
+	/*
+	 * Set syscallno to -1 by default (overridden later if real syscall).
+	 */
 	.if	\el == 0
-	mov	w21, #NO_SYSCALL
-	str	w21, [sp, #S_SYSCALLNO]
+	mvn	x21, xzr
+	str	x21, [sp, #S_SYSCALLNO]
 	.endif
 
 	/*
@@ -271,7 +205,11 @@ alternative_else_nop_endif
 	.if	\el != 0
 	/* Restore the task's original addr_limit. */
 	ldr	x20, [sp, #S_ORIG_ADDR_LIMIT]
+#ifdef CONFIG_THREAD_INFO_IN_TASK
 	str	x20, [tsk, #TSK_TI_ADDR_LIMIT]
+#else
+	str	x20, [tsk, #TI_ADDR_LIMIT]
+#endif
 
 	/* No need to restore UAO, it will be restored from SPSR_EL1 */
 	.endif
@@ -329,8 +267,6 @@ alternative_if ARM64_WORKAROUND_845719
 alternative_else_nop_endif
 #endif
 3:
-	apply_ssbd 0, 5f, x0, x1
-5:
 	.endif
 
 	msr	elr_el1, x21			// set up the return data
@@ -377,17 +313,31 @@ alternative_insn eret, nop, ARM64_UNMAP_KERNEL_AT_EL0
 	 * If the top ~(THREAD_SIZE - 1) bits match, we are on a task stack,
 	 * and should switch to the irq stack.
 	 */
+#ifdef CONFIG_THREAD_INFO_IN_TASK
 	ldr	x25, [tsk, TSK_STACK]
 	eor	x25, x25, x19
 	and	x25, x25, #~(THREAD_SIZE - 1)
 	cbnz	x25, 9998f
+#else
+	and	x25, x19, #~(THREAD_SIZE - 1)
+	cmp	x25, tsk
+	b.ne	9998f
+#endif
 
-	ldr_this_cpu x25, irq_stack_ptr, x26
-	mov	x26, #IRQ_STACK_SIZE
+	adr_this_cpu x25, irq_stack, x26
+	mov	x26, #IRQ_STACK_START_SP
 	add	x26, x25, x26
 
 	/* switch to the irq stack */
 	mov	sp, x26
+
+	/*
+	 * Add a dummy stack frame, this non-standard format is fixed up
+	 * by unwind_frame()
+	 */
+	stp     x29, x19, [sp, #-16]!
+	mov	x29, sp
+
 9998:
 	.endm
 
@@ -405,10 +355,8 @@ alternative_insn eret, nop, ARM64_UNMAP_KERNEL_AT_EL0
  *
  * x7 is reserved for the system call number in 32-bit mode.
  */
-wsc_nr	.req	w25		// number of system calls
-xsc_nr	.req	x25		// number of system calls (zero-extended)
-wscno	.req	w26		// syscall number
-xscno	.req	x26		// syscall number (zero-extended)
+sc_nr	.req	x25		// number of system calls
+scno	.req	x26		// syscall number
 stbl	.req	x27		// syscall table pointer
 tsk	.req	x28		// current thread_info
 
@@ -460,34 +408,6 @@ ENTRY(vectors)
 #endif
 END(vectors)
 
-#ifdef CONFIG_VMAP_STACK
-	/*
-	 * We detected an overflow in kernel_ventry, which switched to the
-	 * overflow stack. Stash the exception regs, and head to our overflow
-	 * handler.
-	 */
-__bad_stack:
-	/* Restore the original x0 value */
-	mrs	x0, tpidrro_el0
-
-	/*
-	 * Store the original GPRs to the new stack. The orginal SP (minus
-	 * S_FRAME_SIZE) was stashed in tpidr_el0 by kernel_ventry.
-	 */
-	sub	sp, sp, #S_FRAME_SIZE
-	kernel_entry 1
-	mrs	x0, tpidr_el0
-	add	x0, x0, #S_FRAME_SIZE
-	str	x0, [sp, #S_SP]
-
-	/* Stash the regs for handle_bad_stack */
-	mov	x0, sp
-
-	/* Time to die */
-	bl	handle_bad_stack
-	ASM_BUG()
-#endif /* CONFIG_VMAP_STACK */
-
 /*
  * Invalid mode handlers
  */
@@ -496,8 +416,7 @@ __bad_stack:
 	mov	x0, sp
 	mov	x1, #\reason
 	mrs	x2, esr_el1
-	bl	bad_mode
-	ASM_BUG()
+	b	bad_mode
 	.endm
 
 el0_sync_invalid:
@@ -547,27 +466,10 @@ ENDPROC(el1_error_invalid)
  */
 	.align	6
 el1_sync:
+#ifdef CONFIG_QCOM_TLB_EL2_HANDLER
+	smc #0xffff
+#endif
 	kernel_entry 1
-	mov	x0, sp
-	get_thread_info x20	// top of stack
-	ldr	w4, [x20, #TI_CPU_EXCP]
-	add	w4, w4, #0x1
-	str	w4, [x20, #TI_CPU_EXCP]
-	cmp	w4, #0x1
-	b.ne	el1_sync_nest
-	str	x0, [x20, #TI_REGS_ON_EXCP]
-el1_sync_nest:
-	mrs	x1, esr_el1			// read the syndrome register
-	lsr	x24, x1, #ESR_ELx_EC_SHIFT	// exception class
-	cmp	x24, #ESR_ELx_EC_DABT_CUR	// data abort in EL1
-	b.ne	el1_sync_nest_skip_dec
-	sub	w4, w4, #0x1
-	str	w4, [x20, #TI_CPU_EXCP]
-el1_sync_nest_skip_dec:
-	cmp	w4, #0x2
-	b.lt	el1_sync_nest_skip
-	bl	aee_stop_nested_panic
-el1_sync_nest_skip:
 	mrs	x1, esr_el1			// read the syndrome register
 	lsr	x24, x1, #ESR_ELx_EC_SHIFT	// exception class
 	cmp	x24, #ESR_ELx_EC_DABT_CUR	// data abort in EL1
@@ -603,13 +505,6 @@ el1_da:
 	clear_address_tag x0, x3
 	mov	x2, sp				// struct pt_regs
 	bl	do_mem_abort
-	cmp	x24, #ESR_ELx_EC_DABT_CUR	// data abort in EL1
-	b.eq	el1_da_nest_skip_dec
-	get_thread_info x20	// top of stack
-	ldr	w4, [x20, #TI_CPU_EXCP]
-	sub	w4, w4, #0x1
-	str	w4, [x20, #TI_CPU_EXCP]
-el1_da_nest_skip_dec:
 
 	// disable interrupts before pulling preserved data off the stack
 	disable_irq
@@ -621,20 +516,14 @@ el1_sp_pc:
 	mrs	x0, far_el1
 	enable_dbg
 	mov	x2, sp
-	bl	do_sp_pc_abort
-	ASM_BUG()
+	b	do_sp_pc_abort
 el1_undef:
 	/*
 	 * Undefined instruction
 	 */
 	enable_dbg
 	mov	x0, sp
-	bl	do_undefinstr
-	get_thread_info x20     // top of stack
-	ldr	w4, [x20, #TI_CPU_EXCP]
-	sub	w4, w4, #0x1
-	str	w4, [x20, #TI_CPU_EXCP]
-	kernel_exit 1
+	b	do_undefinstr
 el1_dbg:
 	/*
 	 * Debug exception handling
@@ -645,11 +534,6 @@ el1_dbg:
 	mrs	x0, far_el1
 	mov	x2, sp				// struct pt_regs
 	bl	do_debug_exception
-	get_thread_info x20	// top of stack
-	ldr	w4, [x20, #TI_CPU_EXCP]
-	sub	w4, w4, #0x1
-	str	w4, [x20, #TI_CPU_EXCP]
-
 	kernel_exit 1
 el1_inv:
 	// TODO: add support for undefined instructions in kernel mode
@@ -657,8 +541,7 @@ el1_inv:
 	mov	x0, sp
 	mov	x2, x1
 	mov	x1, #BAD_SYNC
-	bl	bad_mode
-	ASM_BUG()
+	b	bad_mode
 ENDPROC(el1_sync)
 
 	.align	6
@@ -669,12 +552,21 @@ el1_irq:
 	bl	trace_hardirqs_off
 #endif
 
+	get_thread_info tsk
 	irq_handler
 
 #ifdef CONFIG_PREEMPT
+#ifdef CONFIG_THREAD_INFO_IN_TASK
 	ldr	w24, [tsk, #TSK_TI_PREEMPT]	// get preempt count
+#else
+	ldr	w24, [tsk, #TI_PREEMPT]		// get preempt count
+#endif
 	cbnz	w24, 1f				// preempt count != 0
+#ifdef CONFIG_THREAD_INFO_IN_TASK
 	ldr	x0, [tsk, #TSK_TI_FLAGS]	// get flags
+#else
+	ldr	x0, [tsk, #TI_FLAGS]		// get flags
+#endif
 	tbz	x0, #TIF_NEED_RESCHED, 1f	// needs rescheduling?
 	bl	el1_preempt
 1:
@@ -689,7 +581,11 @@ ENDPROC(el1_irq)
 el1_preempt:
 	mov	x24, lr
 1:	bl	preempt_schedule_irq		// irq en/disable is done inside
+#ifdef CONFIG_THREAD_INFO_IN_TASK
 	ldr	x0, [tsk, #TSK_TI_FLAGS]	// get new tasks TI_FLAGS
+#else
+	ldr	x0, [tsk, #TI_FLAGS]		// get new tasks TI_FLAGS
+#endif
 	tbnz	x0, #TIF_NEED_RESCHED, 1b	// needs rescheduling?
 	ret	x24
 #endif
@@ -737,7 +633,7 @@ el0_sync_compat:
 	cmp	x24, #ESR_ELx_EC_IABT_LOW	// instruction abort in EL0
 	b.eq	el0_ia
 	cmp	x24, #ESR_ELx_EC_FP_ASIMD	// FP/ASIMD access
-	b.eq	el0_fpsimd_acc
+	b.eq	el0_fpsimd_acc_compat
 	cmp	x24, #ESR_ELx_EC_FP_EXC32	// FP/ASIMD exception
 	b.eq	el0_fpsimd_exc
 	cmp	x24, #ESR_ELx_EC_PC_ALIGN	// pc alignment exception
@@ -762,8 +658,8 @@ el0_svc_compat:
 	 * AArch32 syscall handling
 	 */
 	adrp	stbl, compat_sys_call_table	// load compat syscall table pointer
-	mov	wscno, w7			// syscall number in w7 (r7)
-	mov     wsc_nr, #__NR_compat_syscalls
+	uxtw	scno, w7			// syscall number in w7 (r7)
+	mov     sc_nr, #__NR_compat_syscalls
 	b	el0_svc_naked
 
 	.align	6
@@ -810,6 +706,17 @@ el0_fpsimd_acc:
 	mov	x1, sp
 	bl	do_fpsimd_acc
 	b	ret_to_user
+el0_fpsimd_acc_compat:
+	/*
+	 * Floating Point or Advanced SIMD access
+	 */
+	enable_dbg
+	ct_user_exit
+	mov	x0, x25
+	mov	x1, sp
+	bl	do_fpsimd_acc_compat
+	b	ret_to_user
+
 el0_fpsimd_exc:
 	/*
 	 * Floating Point or Advanced SIMD exception
@@ -825,10 +732,8 @@ el0_sp_pc:
 	 * Stack or PC alignment exception handling
 	 */
 	mrs	x26, far_el1
-	enable_dbg
-#ifdef CONFIG_TRACE_IRQFLAGS
-	bl	trace_hardirqs_off
-#endif
+	// enable interrupts before calling the main handler
+	enable_dbg_and_irq
 	ct_user_exit
 	mov	x0, x26
 	mov	x1, x25
@@ -887,11 +792,6 @@ el0_irq_naked:
 #endif
 
 	ct_user_exit
-#ifdef CONFIG_HARDEN_BRANCH_PREDICTOR
-	tbz	x22, #55, 1f
-	bl	do_el0_irq_bp_hardening
-1:
-#endif
 	irq_handler
 
 #ifdef CONFIG_TRACE_IRQFLAGS
@@ -901,13 +801,81 @@ el0_irq_naked:
 ENDPROC(el0_irq)
 
 /*
+ * Register switch for AArch64. The callee-saved registers need to be saved
+ * and restored. On entry:
+ *   x0 = previous task_struct (must be preserved across the switch)
+ *   x1 = next task_struct
+ * Previous and next are guaranteed not to be the same.
+ *
+ */
+ENTRY(cpu_switch_to)
+	mov	x10, #THREAD_CPU_CONTEXT
+	add	x8, x0, x10
+	mov	x9, sp
+	stp	x19, x20, [x8], #16		// store callee-saved registers
+	stp	x21, x22, [x8], #16
+	stp	x23, x24, [x8], #16
+	stp	x25, x26, [x8], #16
+	stp	x27, x28, [x8], #16
+	stp	x29, x9, [x8], #16
+	str	lr, [x8]
+	add	x8, x1, x10
+	ldp	x19, x20, [x8], #16		// restore callee-saved registers
+	ldp	x21, x22, [x8], #16
+	ldp	x23, x24, [x8], #16
+	ldp	x25, x26, [x8], #16
+	ldp	x27, x28, [x8], #16
+	ldp	x29, x9, [x8], #16
+	ldr	lr, [x8]
+#ifdef CONFIG_ARM64_REG_REBALANCE_ON_CTX_SW
+	orr	x13, x13, x13
+	orr	x14, x14, x14
+	orr	x15, x15, x15
+	orr	x16, x16, x16
+	orr	x17, x17, x17
+	orr	x18, x18, x18
+	orr	x19, x19, x19
+	orr	x20, x20, x20
+	orr	x21, x21, x21
+	mov	v0.16b, v0.16b
+	mov	v1.16b, v1.16b
+	mov	v2.16b, v2.16b
+	mov	v3.16b, v3.16b
+	mov	v4.16b, v4.16b
+	mov	v5.16b, v5.16b
+	mov	v6.16b, v6.16b
+	mov	v7.16b, v7.16b
+	mov	v8.16b, v8.16b
+	mov	v9.16b, v9.16b
+	mov	v10.16b, v10.16b
+	mov	v11.16b, v11.16b
+	mov	v12.16b, v12.16b
+	mov	v13.16b, v13.16b
+	mov	v14.16b, v14.16b
+	mov	v15.16b, v15.16b
+#endif
+	mov	sp, x9
+#ifdef CONFIG_THREAD_INFO_IN_TASK
+	msr	sp_el0, x1
+#else
+	and	x9, x9, #~(THREAD_SIZE - 1)
+	msr	sp_el0, x9
+#endif
+	ret
+ENDPROC(cpu_switch_to)
+
+/*
  * This is the fast syscall return path.  We do as little as possible here,
  * and this includes saving x0 back into the kernel stack.
  */
 ret_fast_syscall:
 	disable_irq				// disable interrupts
 	str	x0, [sp, #S_X0]			// returned x0
+#ifdef CONFIG_THREAD_INFO_IN_TASK
 	ldr	x1, [tsk, #TSK_TI_FLAGS]	// re-check for syscall tracing
+#else
+	ldr	x1, [tsk, #TI_FLAGS]		// re-check for syscall tracing
+#endif
 	and	x2, x1, #_TIF_SYSCALL_WORK
 	cbnz	x2, ret_fast_syscall_trace
 	and	x2, x1, #_TIF_WORK_MASK
@@ -922,25 +890,45 @@ ret_fast_syscall_trace:
  * Ok, we need to do extra processing, enter the slow path.
  */
 work_pending:
+	tbnz	x1, #TIF_NEED_RESCHED, work_resched
+	/* TIF_SIGPENDING, TIF_NOTIFY_RESUME or TIF_FOREIGN_FPSTATE case */
 	mov	x0, sp				// 'regs'
+	enable_irq				// enable interrupts for do_notify_resume()
 	bl	do_notify_resume
+	b	ret_to_user
+work_resched:
 #ifdef CONFIG_TRACE_IRQFLAGS
-	bl	trace_hardirqs_on		// enabled while in userspace
+	bl	trace_hardirqs_off		// the IRQs are off here, inform the tracing code
 #endif
-	ldr	x1, [tsk, #TSK_TI_FLAGS]	// re-check for single-step
-	b	finish_ret_to_user
+	bl	schedule
+
 /*
  * "slow" syscall return path.
  */
 ret_to_user:
 	disable_irq				// disable interrupts
+#ifdef CONFIG_THREAD_INFO_IN_TASK
 	ldr	x1, [tsk, #TSK_TI_FLAGS]
+#else
+	ldr	x1, [tsk, #TI_FLAGS]
+#endif
 	and	x2, x1, #_TIF_WORK_MASK
 	cbnz	x2, work_pending
-finish_ret_to_user:
 	enable_step_tsk x1, x2
 	kernel_exit 0
 ENDPROC(ret_to_user)
+
+/*
+ * This is how we return from a fork.
+ */
+ENTRY(ret_from_fork)
+	bl	schedule_tail
+	cbz	x19, 1f				// not a kernel thread
+	mov	x0, x20
+	blr	x19
+1:	get_thread_info tsk
+	b	ret_to_user
+ENDPROC(ret_from_fork)
 
 /*
  * SVC handler.
@@ -948,20 +936,23 @@ ENDPROC(ret_to_user)
 	.align	6
 el0_svc:
 	adrp	stbl, sys_call_table		// load syscall table pointer
-	mov	wscno, w8			// syscall number in w8
-	mov	wsc_nr, #__NR_syscalls
+	uxtw	scno, w8			// syscall number in w8
+	mov	sc_nr, #__NR_syscalls
 el0_svc_naked:					// compat entry point
-	stp	x0, xscno, [sp, #S_ORIG_X0]	// save the original x0 and syscall number
+	stp	x0, scno, [sp, #S_ORIG_X0]	// save the original x0 and syscall number
 	enable_dbg_and_irq
 	ct_user_exit 1
 
+#ifdef CONFIG_THREAD_INFO_IN_TASK
 	ldr	x16, [tsk, #TSK_TI_FLAGS]	// check for syscall hooks
+#else
+	ldr	x16, [tsk, #TI_FLAGS]		// check for syscall hooks
+#endif
 	tst	x16, #_TIF_SYSCALL_WORK
 	b.ne	__sys_trace
-	cmp     wscno, wsc_nr			// check upper syscall limit
+	cmp     scno, sc_nr                     // check upper syscall limit
 	b.hs	ni_sys
-	mask_nospec64 xscno, xsc_nr, x19	// enforce bounds for syscall number
-	ldr	x16, [stbl, xscno, lsl #3]	// address in the syscall table
+	ldr	x16, [stbl, scno, lsl #3]	// address in the syscall table
 	blr	x16				// call sys_* routine
 	b	ret_fast_syscall
 ni_sys:
@@ -975,23 +966,24 @@ ENDPROC(el0_svc)
 	 * switches, and waiting for our parent to respond.
 	 */
 __sys_trace:
-	cmp     wscno, #NO_SYSCALL		// user-issued syscall(-1)?
+	mov	w0, #-1				// set default errno for
+	cmp     scno, x0			// user-issued syscall(-1)
 	b.ne	1f
-	mov	x0, #-ENOSYS			// set default errno if so
+	mov	x0, #-ENOSYS
 	str	x0, [sp, #S_X0]
 1:	mov	x0, sp
 	bl	syscall_trace_enter
-	cmp	w0, #NO_SYSCALL			// skip the syscall?
+	cmp	w0, #-1				// skip the syscall?
 	b.eq	__sys_trace_return_skipped
-	mov	wscno, w0			// syscall number (possibly new)
+	uxtw	scno, w0			// syscall number (possibly new)
 	mov	x1, sp				// pointer to regs
-	cmp	wscno, wsc_nr			// check upper syscall limit
+	cmp	scno, sc_nr			// check upper syscall limit
 	b.hs	__ni_sys_trace
 	ldp	x0, x1, [sp]			// restore the syscall args
 	ldp	x2, x3, [sp, #S_X2]
 	ldp	x4, x5, [sp, #S_X4]
 	ldp	x6, x7, [sp, #S_X6]
-	ldr	x16, [stbl, xscno, lsl #3]	// address in the syscall table
+	ldr	x16, [stbl, scno, lsl #3]	// address in the syscall table
 	blr	x16				// call sys_* routine
 
 __sys_trace_return:
@@ -1007,7 +999,6 @@ __ni_sys_trace:
 	b	__sys_trace_return
 
 	.popsection				// .entry.text
-
 #ifdef CONFIG_UNMAP_KERNEL_AT_EL0
 /*
  * Exception vectors trampoline.
@@ -1019,8 +1010,7 @@ __ni_sys_trace:
 	sub	\tmp, \tmp, #(SWAPPER_DIR_SIZE + RESERVED_TTBR0_SIZE)
 	bic	\tmp, \tmp, #USER_ASID_FLAG
 	msr	ttbr1_el1, \tmp
-#ifdef CONFIG_QCOM_FALKOR_ERRATUM_1003
-alternative_if ARM64_WORKAROUND_QCOM_FALKOR_E1003
+#ifdef CONFIG_ARCH_MSM8996
 	/* ASID already in \tmp[63:48] */
 	movk	\tmp, #:abs_g2_nc:(TRAMP_VALIAS >> 12)
 	movk	\tmp, #:abs_g1_nc:(TRAMP_VALIAS >> 12)
@@ -1029,8 +1019,7 @@ alternative_if ARM64_WORKAROUND_QCOM_FALKOR_E1003
 	isb
 	tlbi	vae1, \tmp
 	dsb	nsh
-alternative_else_nop_endif
-#endif /* CONFIG_QCOM_FALKOR_ERRATUM_1003 */
+#endif /* CONFIG_ARCH_MSM8996 */
 	.endm
 
 	.macro tramp_unmap_kernel, tmp
@@ -1039,9 +1028,16 @@ alternative_else_nop_endif
 	orr	\tmp, \tmp, #USER_ASID_FLAG
 	msr	ttbr1_el1, \tmp
 	/*
-	 * We avoid running the post_ttbr_update_workaround here because
-	 * it's only needed by Cavium ThunderX, which requires KPTI to be
-	 * disabled.
+	 * We avoid running the post_ttbr_update_workaround here because the
+	 * user and kernel ASIDs don't have conflicting mappings, so any
+	 * "blessing" as described in:
+	 *
+	 *   http://lkml.kernel.org/r/56BB848A.6060603@caviumnetworks.com
+	 *
+	 * will not hurt correctness. Whilst this may partially defeat the
+	 * point of using split ASIDs in the first place, it avoids
+	 * the hit of invalidating the entire I-cache on every return to
+	 * userspace.
 	 */
 	.endm
 
@@ -1051,18 +1047,15 @@ alternative_else_nop_endif
 	.if	\regsize == 64
 	msr	tpidrro_el0, x30	// Restored in kernel_ventry
 	.endif
-	/*
-	 * Defend against branch aliasing attacks by pushing a dummy
-	 * entry onto the return stack and using a RET instruction to
-	 * enter the full-fat kernel vectors.
-	 */
 	bl	2f
 	b	.
 2:
 	tramp_map_kernel	x30
 #ifdef CONFIG_RANDOMIZE_BASE
 	adr	x30, tramp_vectors + PAGE_SIZE
-alternative_insn isb, nop, ARM64_WORKAROUND_QCOM_FALKOR_E1003
+#ifndef CONFIG_ARCH_MSM8996
+	isb
+#endif
 	ldr	x30, [x30]
 #else
 	ldr	x30, =vectors
@@ -1126,49 +1119,3 @@ ENTRY(sys_rt_sigreturn_wrapper)
 	mov	x0, sp
 	b	sys_rt_sigreturn
 ENDPROC(sys_rt_sigreturn_wrapper)
-
-/*
- * Register switch for AArch64. The callee-saved registers need to be saved
- * and restored. On entry:
- *   x0 = previous task_struct (must be preserved across the switch)
- *   x1 = next task_struct
- * Previous and next are guaranteed not to be the same.
- *
- */
-ENTRY(cpu_switch_to)
-	mov	x10, #THREAD_CPU_CONTEXT
-	add	x8, x0, x10
-	mov	x9, sp
-	stp	x19, x20, [x8], #16		// store callee-saved registers
-	stp	x21, x22, [x8], #16
-	stp	x23, x24, [x8], #16
-	stp	x25, x26, [x8], #16
-	stp	x27, x28, [x8], #16
-	stp	x29, x9, [x8], #16
-	str	lr, [x8]
-	add	x8, x1, x10
-	ldp	x19, x20, [x8], #16		// restore callee-saved registers
-	ldp	x21, x22, [x8], #16
-	ldp	x23, x24, [x8], #16
-	ldp	x25, x26, [x8], #16
-	ldp	x27, x28, [x8], #16
-	ldp	x29, x9, [x8], #16
-	ldr	lr, [x8]
-	mov	sp, x9
-	msr	sp_el0, x1
-	ret
-ENDPROC(cpu_switch_to)
-NOKPROBE(cpu_switch_to)
-
-/*
- * This is how we return from a fork.
- */
-ENTRY(ret_from_fork)
-	bl	schedule_tail
-	cbz	x19, 1f				// not a kernel thread
-	mov	x0, x20
-	blr	x19
-1:	get_thread_info tsk
-	b	ret_to_user
-ENDPROC(ret_from_fork)
-NOKPROBE(ret_from_fork)

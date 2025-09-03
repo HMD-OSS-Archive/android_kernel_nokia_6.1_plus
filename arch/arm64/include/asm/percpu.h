@@ -16,15 +16,11 @@
 #ifndef __ASM_PERCPU_H
 #define __ASM_PERCPU_H
 
-#include <asm/alternative.h>
 #include <asm/stack_pointer.h>
 
 static inline void set_my_cpu_offset(unsigned long off)
 {
-	asm volatile(ALTERNATIVE("msr tpidr_el1, %0",
-				 "msr tpidr_el2, %0",
-				 ARM64_HAS_VIRT_HOST_EXTN)
-			:: "r" (off) : "memory");
+	asm volatile("msr tpidr_el1, %0" :: "r" (off) : "memory");
 }
 
 static inline unsigned long __my_cpu_offset(void)
@@ -35,10 +31,7 @@ static inline unsigned long __my_cpu_offset(void)
 	 * We want to allow caching the value, so avoid using volatile and
 	 * instead use a fake stack read to hazard against barrier().
 	 */
-	asm(ALTERNATIVE("mrs %0, tpidr_el1",
-			"mrs %0, tpidr_el2",
-			ARM64_HAS_VIRT_HOST_EXTN)
-		: "=r" (off) :
+	asm("mrs %0, tpidr_el1" : "=r" (off) :
 		"Q" (*(const unsigned long *)current_stack_pointer));
 
 	return off;
@@ -49,7 +42,7 @@ static inline unsigned long __my_cpu_offset(void)
 static inline unsigned long __percpu_##op(void *ptr,			\
 			unsigned long val, int size)			\
 {									\
-	unsigned long loop, ret=0;					\
+	unsigned long loop, ret;					\
 									\
 	switch (size) {							\
 	case 1:								\
@@ -107,20 +100,20 @@ PERCPU_OP(or, orr)
 
 static inline unsigned long __percpu_read(void *ptr, int size)
 {
-	unsigned long ret=0;
+	unsigned long ret;
 
 	switch (size) {
 	case 1:
-		ret = READ_ONCE(*(u8 *)ptr);
+		ret = ACCESS_ONCE(*(u8 *)ptr);
 		break;
 	case 2:
-		ret = READ_ONCE(*(u16 *)ptr);
+		ret = ACCESS_ONCE(*(u16 *)ptr);
 		break;
 	case 4:
-		ret = READ_ONCE(*(u32 *)ptr);
+		ret = ACCESS_ONCE(*(u32 *)ptr);
 		break;
 	case 8:
-		ret = READ_ONCE(*(u64 *)ptr);
+		ret = ACCESS_ONCE(*(u64 *)ptr);
 		break;
 	default:
 		ret = 0;
@@ -134,16 +127,16 @@ static inline void __percpu_write(void *ptr, unsigned long val, int size)
 {
 	switch (size) {
 	case 1:
-		WRITE_ONCE(*(u8 *)ptr, (u8)val);
+		ACCESS_ONCE(*(u8 *)ptr) = (u8)val;
 		break;
 	case 2:
-		WRITE_ONCE(*(u16 *)ptr, (u16)val);
+		ACCESS_ONCE(*(u16 *)ptr) = (u16)val;
 		break;
 	case 4:
-		WRITE_ONCE(*(u32 *)ptr, (u32)val);
+		ACCESS_ONCE(*(u32 *)ptr) = (u32)val;
 		break;
 	case 8:
-		WRITE_ONCE(*(u64 *)ptr, (u64)val);
+		ACCESS_ONCE(*(u64 *)ptr) = (u64)val;
 		break;
 	default:
 		BUILD_BUG();
@@ -153,7 +146,7 @@ static inline void __percpu_write(void *ptr, unsigned long val, int size)
 static inline unsigned long __percpu_xchg(void *ptr, unsigned long val,
 						int size)
 {
-	unsigned long ret=0, loop;
+	unsigned long ret, loop;
 
 	switch (size) {
 	case 1:
@@ -203,19 +196,19 @@ static inline unsigned long __percpu_xchg(void *ptr, unsigned long val,
 #define _percpu_read(pcp)						\
 ({									\
 	typeof(pcp) __retval;						\
-	preempt_disable_notrace();					\
+	preempt_disable();						\
 	__retval = (typeof(pcp))__percpu_read(raw_cpu_ptr(&(pcp)), 	\
 					      sizeof(pcp));		\
-	preempt_enable_notrace();					\
+	preempt_enable();						\
 	__retval;							\
 })
 
 #define _percpu_write(pcp, val)						\
 do {									\
-	preempt_disable_notrace();					\
+	preempt_disable();						\
 	__percpu_write(raw_cpu_ptr(&(pcp)), (unsigned long)(val), 	\
 				sizeof(pcp));				\
-	preempt_enable_notrace();					\
+	preempt_enable();						\
 } while(0)								\
 
 #define _pcp_protect(operation, pcp, val)			\

@@ -24,7 +24,6 @@
 #include "xfs_bit.h"
 #include "xfs_sb.h"
 #include "xfs_mount.h"
-#include "xfs_defer.h"
 #include "xfs_inode.h"
 #include "xfs_btree.h"
 #include "xfs_ialloc.h"
@@ -40,18 +39,18 @@
 #include "xfs_icache.h"
 #include "xfs_trace.h"
 #include "xfs_log.h"
-#include "xfs_rmap.h"
 
 
 /*
  * Allocation group level functions.
  */
-int
+static inline int
 xfs_ialloc_cluster_alignment(
 	struct xfs_mount	*mp)
 {
 	if (xfs_sb_version_hasalign(&mp->m_sb) &&
-	    mp->m_sb.sb_inoalignmt >= xfs_icluster_size_fsb(mp))
+	    mp->m_sb.sb_inoalignmt >=
+			XFS_B_TO_FSBT(mp, mp->m_inode_cluster_size))
 		return mp->m_sb.sb_inoalignmt;
 	return 1;
 }
@@ -98,15 +97,24 @@ xfs_inobt_update(
 	return xfs_btree_update(cur, &rec);
 }
 
-/* Convert on-disk btree record to incore inobt record. */
-void
-xfs_inobt_btrec_to_irec(
-	struct xfs_mount		*mp,
-	union xfs_btree_rec		*rec,
-	struct xfs_inobt_rec_incore	*irec)
+/*
+ * Get the data from the pointed-to record.
+ */
+int					/* error */
+xfs_inobt_get_rec(
+	struct xfs_btree_cur	*cur,	/* btree cursor */
+	xfs_inobt_rec_incore_t	*irec,	/* btree record */
+	int			*stat)	/* output: success/failure */
 {
+	union xfs_btree_rec	*rec;
+	int			error;
+
+	error = xfs_btree_get_rec(cur, &rec, stat);
+	if (error || *stat == 0)
+		return error;
+
 	irec->ir_startino = be32_to_cpu(rec->inobt.ir_startino);
-	if (xfs_sb_version_hassparseinodes(&mp->m_sb)) {
+	if (xfs_sb_version_hassparseinodes(&cur->bc_mp->m_sb)) {
 		irec->ir_holemask = be16_to_cpu(rec->inobt.ir_u.sp.ir_holemask);
 		irec->ir_count = rec->inobt.ir_u.sp.ir_count;
 		irec->ir_freecount = rec->inobt.ir_u.sp.ir_freecount;
@@ -121,25 +129,6 @@ xfs_inobt_btrec_to_irec(
 				be32_to_cpu(rec->inobt.ir_u.f.ir_freecount);
 	}
 	irec->ir_free = be64_to_cpu(rec->inobt.ir_free);
-}
-
-/*
- * Get the data from the pointed-to record.
- */
-int
-xfs_inobt_get_rec(
-	struct xfs_btree_cur		*cur,
-	struct xfs_inobt_rec_incore	*irec,
-	int				*stat)
-{
-	union xfs_btree_rec		*rec;
-	int				error;
-
-	error = xfs_btree_get_rec(cur, &rec, stat);
-	if (error || *stat == 0)
-		return error;
-
-	xfs_inobt_btrec_to_irec(cur->bc_mp, rec, irec);
 
 	return 0;
 }
@@ -150,9 +139,9 @@ xfs_inobt_get_rec(
 STATIC int
 xfs_inobt_insert_rec(
 	struct xfs_btree_cur	*cur,
-	uint16_t		holemask,
-	uint8_t			count,
-	int32_t			freecount,
+	__uint16_t		holemask,
+	__uint8_t		count,
+	__int32_t		freecount,
 	xfs_inofree_t		free,
 	int			*stat)
 {
@@ -378,6 +367,8 @@ xfs_ialloc_inode_init(
 				 * transaction and pin the log appropriately.
 				 */
 				xfs_trans_ordered_buf(tp, fbuf);
+				xfs_trans_log_buf(tp, fbuf, 0,
+						  BBTOB(fbuf->b_length) - 1);
 			}
 		} else {
 			fbuf->b_flags |= XBF_DONE;
@@ -623,7 +614,6 @@ xfs_ialloc_ag_alloc(
 	args.tp = tp;
 	args.mp = tp->t_mountp;
 	args.fsbno = NULLFSBLOCK;
-	xfs_rmap_ag_owner(&args.oinfo, XFS_RMAP_OWN_INODES);
 
 #ifdef DEBUG
 	/* randomly do sparse inode allocations */
@@ -1131,7 +1121,6 @@ xfs_dialloc_ag_inobt(
 	int			error;
 	int			offset;
 	int			i, j;
-	int			searchdistance = 10;
 
 	pag = xfs_perag_get(mp, agno);
 
@@ -1158,6 +1147,7 @@ xfs_dialloc_ag_inobt(
 	if (pagno == agno) {
 		int		doneleft;	/* done, to the left */
 		int		doneright;	/* done, to the right */
+		int		searchdistance = 10;
 
 		error = xfs_inobt_lookup(cur, pagino, XFS_LOOKUP_LE, &i);
 		if (error)
@@ -1218,8 +1208,20 @@ xfs_dialloc_ag_inobt(
 		/*
 		 * Loop until we find an inode chunk with a free inode.
 		 */
-		while (--searchdistance > 0 && (!doneleft || !doneright)) {
+		while (!doneleft || !doneright) {
 			int	useleft;  /* using left inode chunk this time */
+
+			if (!--searchdistance) {
+				/*
+				 * Not in range - save last search
+				 * location and allocate a new inode
+				 */
+				xfs_btree_del_cursor(tcur, XFS_BTREE_NOERROR);
+				pag->pagl_leftrec = trec.ir_startino;
+				pag->pagl_rightrec = rec.ir_startino;
+				pag->pagl_pagino = pagino;
+				goto newino;
+			}
 
 			/* figure out the closer block if both are valid. */
 			if (!doneleft && !doneright) {
@@ -1232,13 +1234,13 @@ xfs_dialloc_ag_inobt(
 
 			/* free inodes to the left? */
 			if (useleft && trec.ir_freecount) {
+				rec = trec;
 				xfs_btree_del_cursor(cur, XFS_BTREE_NOERROR);
 				cur = tcur;
 
 				pag->pagl_leftrec = trec.ir_startino;
 				pag->pagl_rightrec = rec.ir_startino;
 				pag->pagl_pagino = pagino;
-				rec = trec;
 				goto alloc_inode;
 			}
 
@@ -1264,37 +1266,26 @@ xfs_dialloc_ag_inobt(
 				goto error1;
 		}
 
-		if (searchdistance <= 0) {
-			/*
-			 * Not in range - save last search
-			 * location and allocate a new inode
-			 */
-			xfs_btree_del_cursor(tcur, XFS_BTREE_NOERROR);
-			pag->pagl_leftrec = trec.ir_startino;
-			pag->pagl_rightrec = rec.ir_startino;
-			pag->pagl_pagino = pagino;
-
-		} else {
-			/*
-			 * We've reached the end of the btree. because
-			 * we are only searching a small chunk of the
-			 * btree each search, there is obviously free
-			 * inodes closer to the parent inode than we
-			 * are now. restart the search again.
-			 */
-			pag->pagl_pagino = NULLAGINO;
-			pag->pagl_leftrec = NULLAGINO;
-			pag->pagl_rightrec = NULLAGINO;
-			xfs_btree_del_cursor(tcur, XFS_BTREE_NOERROR);
-			xfs_btree_del_cursor(cur, XFS_BTREE_NOERROR);
-			goto restart_pagno;
-		}
+		/*
+		 * We've reached the end of the btree. because
+		 * we are only searching a small chunk of the
+		 * btree each search, there is obviously free
+		 * inodes closer to the parent inode than we
+		 * are now. restart the search again.
+		 */
+		pag->pagl_pagino = NULLAGINO;
+		pag->pagl_leftrec = NULLAGINO;
+		pag->pagl_rightrec = NULLAGINO;
+		xfs_btree_del_cursor(tcur, XFS_BTREE_NOERROR);
+		xfs_btree_del_cursor(cur, XFS_BTREE_NOERROR);
+		goto restart_pagno;
 	}
 
 	/*
 	 * In a different AG from the parent.
 	 * See if the most recently allocated block has any free.
 	 */
+newino:
 	if (agi->agi_newino != cpu_to_be32(NULLAGINO)) {
 		error = xfs_inobt_lookup(cur, be32_to_cpu(agi->agi_newino),
 					 XFS_LOOKUP_EQ, &i);
@@ -1826,21 +1817,20 @@ xfs_difree_inode_chunk(
 	struct xfs_mount		*mp,
 	xfs_agnumber_t			agno,
 	struct xfs_inobt_rec_incore	*rec,
-	struct xfs_defer_ops		*dfops)
+	struct xfs_bmap_free		*flist)
 {
 	xfs_agblock_t	sagbno = XFS_AGINO_TO_AGBNO(mp, rec->ir_startino);
 	int		startidx, endidx;
 	int		nextbit;
 	xfs_agblock_t	agbno;
 	int		contigblk;
-	struct xfs_owner_info	oinfo;
 	DECLARE_BITMAP(holemask, XFS_INOBT_HOLEMASK_BITS);
-	xfs_rmap_ag_owner(&oinfo, XFS_RMAP_OWN_INODES);
 
 	if (!xfs_inobt_issparse(rec->ir_holemask)) {
 		/* not sparse, calculate extent info directly */
-		xfs_bmap_add_free(mp, dfops, XFS_AGB_TO_FSB(mp, agno, sagbno),
-				  mp->m_ialloc_blks, &oinfo);
+		xfs_bmap_add_free(XFS_AGB_TO_FSB(mp, agno,
+				  XFS_AGINO_TO_AGBNO(mp, rec->ir_startino)),
+				  mp->m_ialloc_blks, flist, mp);
 		return;
 	}
 
@@ -1883,8 +1873,8 @@ xfs_difree_inode_chunk(
 
 		ASSERT(agbno % mp->m_sb.sb_spino_align == 0);
 		ASSERT(contigblk % mp->m_sb.sb_spino_align == 0);
-		xfs_bmap_add_free(mp, dfops, XFS_AGB_TO_FSB(mp, agno, agbno),
-				  contigblk, &oinfo);
+		xfs_bmap_add_free(XFS_AGB_TO_FSB(mp, agno, agbno), contigblk,
+				  flist, mp);
 
 		/* reset range to current bit and carry on... */
 		startidx = endidx = nextbit;
@@ -1900,7 +1890,7 @@ xfs_difree_inobt(
 	struct xfs_trans		*tp,
 	struct xfs_buf			*agbp,
 	xfs_agino_t			agino,
-	struct xfs_defer_ops		*dfops,
+	struct xfs_bmap_free		*flist,
 	struct xfs_icluster		*xic,
 	struct xfs_inobt_rec_incore	*orec)
 {
@@ -1962,7 +1952,7 @@ xfs_difree_inobt(
 	if (!(mp->m_flags & XFS_MOUNT_IKEEP) &&
 	    rec.ir_free == XFS_INOBT_ALL_FREE &&
 	    mp->m_sb.sb_inopblock <= XFS_INODES_PER_CHUNK) {
-		xic->deleted = true;
+		xic->deleted = 1;
 		xic->first_ino = XFS_AGINO_TO_INO(mp, agno, rec.ir_startino);
 		xic->alloc = xfs_inobt_irec_to_allocmask(&rec);
 
@@ -1987,9 +1977,9 @@ xfs_difree_inobt(
 			goto error0;
 		}
 
-		xfs_difree_inode_chunk(mp, agno, &rec, dfops);
+		xfs_difree_inode_chunk(mp, agno, &rec, flist);
 	} else {
-		xic->deleted = false;
+		xic->deleted = 0;
 
 		error = xfs_inobt_update(cur, &rec);
 		if (error) {
@@ -2132,7 +2122,7 @@ int
 xfs_difree(
 	struct xfs_trans	*tp,		/* transaction pointer */
 	xfs_ino_t		inode,		/* inode to be freed */
-	struct xfs_defer_ops	*dfops,		/* extents to free */
+	struct xfs_bmap_free	*flist,		/* extents to free */
 	struct xfs_icluster	*xic)	/* cluster info if deleted */
 {
 	/* REFERENCED */
@@ -2184,7 +2174,7 @@ xfs_difree(
 	/*
 	 * Fix up the inode allocation btree.
 	 */
-	error = xfs_difree_inobt(mp, tp, agbp, agino, dfops, xic, &rec);
+	error = xfs_difree_inobt(mp, tp, agbp, agino, flist, xic, &rec);
 	if (error)
 		goto error0;
 
@@ -2350,8 +2340,7 @@ xfs_imap(
 
 		imap->im_blkno = XFS_AGB_TO_DADDR(mp, agno, agbno);
 		imap->im_len = XFS_FSB_TO_BB(mp, 1);
-		imap->im_boffset = (unsigned short)(offset <<
-							mp->m_sb.sb_inodelog);
+		imap->im_boffset = (ushort)(offset << mp->m_sb.sb_inodelog);
 		return 0;
 	}
 
@@ -2379,7 +2368,7 @@ out_map:
 
 	imap->im_blkno = XFS_AGB_TO_DADDR(mp, agno, cluster_agbno);
 	imap->im_len = XFS_FSB_TO_BB(mp, blks_per_cluster);
-	imap->im_boffset = (unsigned short)(offset << mp->m_sb.sb_inodelog);
+	imap->im_boffset = (ushort)(offset << mp->m_sb.sb_inodelog);
 
 	/*
 	 * If the inode number maps to a block outside the bounds
@@ -2406,11 +2395,20 @@ void
 xfs_ialloc_compute_maxlevels(
 	xfs_mount_t	*mp)		/* file system mount structure */
 {
-	uint		inodes;
+	int		level;
+	uint		maxblocks;
+	uint		maxleafents;
+	int		minleafrecs;
+	int		minnoderecs;
 
-	inodes = (1LL << XFS_INO_AGINO_BITS(mp)) >> XFS_INODES_PER_CHUNK_LOG;
-	mp->m_in_maxlevels = xfs_btree_compute_maxlevels(mp, mp->m_inobt_mnr,
-							 inodes);
+	maxleafents = (1LL << XFS_INO_AGINO_BITS(mp)) >>
+		XFS_INODES_PER_CHUNK_LOG;
+	minleafrecs = mp->m_alloc_mnr[0];
+	minnoderecs = mp->m_alloc_mnr[1];
+	maxblocks = (maxleafents + minleafrecs - 1) / minleafrecs;
+	for (level = 1; maxblocks > 1; level++)
+		maxblocks = (maxblocks + minnoderecs - 1) / minnoderecs;
+	mp->m_in_maxlevels = level;
 }
 
 /*
@@ -2456,6 +2454,8 @@ xfs_ialloc_log_agi(
 	agi = XFS_BUF_TO_AGI(bp);
 	ASSERT(agi->agi_magicnum == cpu_to_be32(XFS_AGI_MAGIC));
 #endif
+
+	xfs_trans_buf_set_type(tp, bp, XFS_BLFT_AGI_BUF);
 
 	/*
 	 * Compute byte offsets for the first and last fields in the first
@@ -2517,15 +2517,8 @@ xfs_agi_verify(
 	if (!XFS_AGI_GOOD_VERSION(be32_to_cpu(agi->agi_versionnum)))
 		return false;
 
-	if (be32_to_cpu(agi->agi_level) < 1 ||
-	    be32_to_cpu(agi->agi_level) > XFS_BTREE_MAXLEVELS)
+	if (be32_to_cpu(agi->agi_level) > XFS_BTREE_MAXLEVELS)
 		return false;
-
-	if (xfs_sb_version_hasfinobt(&mp->m_sb) &&
-	    (be32_to_cpu(agi->agi_free_level) < 1 ||
-	     be32_to_cpu(agi->agi_free_level) > XFS_BTREE_MAXLEVELS))
-		return false;
-
 	/*
 	 * during growfs operations, the perag is not fully initialised,
 	 * so we can't use it for any useful checking. growfs ensures we can't
@@ -2549,7 +2542,8 @@ xfs_agi_read_verify(
 	    !xfs_buf_verify_cksum(bp, XFS_AGI_CRC_OFF))
 		xfs_buf_ioerror(bp, -EFSBADCRC);
 	else if (XFS_TEST_ERROR(!xfs_agi_verify(bp), mp,
-				XFS_ERRTAG_IALLOC_READ_AGI))
+				XFS_ERRTAG_IALLOC_READ_AGI,
+				XFS_RANDOM_IALLOC_READ_AGI))
 		xfs_buf_ioerror(bp, -EFSCORRUPTED);
 
 	if (bp->b_error)
@@ -2603,8 +2597,6 @@ xfs_read_agi(
 			XFS_FSS_TO_BB(mp, 1), 0, bpp, &xfs_agi_buf_ops);
 	if (error)
 		return error;
-	if (tp)
-		xfs_trans_buf_set_type(tp, *bpp, XFS_BLFT_AGI_BUF);
 
 	xfs_buf_set_ref(*bpp, XFS_AGI_REF);
 	return 0;

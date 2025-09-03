@@ -147,6 +147,8 @@ static int fec_decode_bufs(struct dm_verity *v, struct dm_verity_fec_io *fio,
 		block = fec_buffer_rs_block(v, fio, n, i);
 		res = fec_decode_rs8(v, fio, block, &par[offset], neras);
 		if (res < 0) {
+			dm_bufio_release(buf);
+
 			r = res;
 			goto error;
 		}
@@ -171,8 +173,6 @@ static int fec_decode_bufs(struct dm_verity *v, struct dm_verity_fec_io *fio,
 done:
 	r = corrected;
 error:
-	dm_bufio_release(buf);
-
 	if (r < 0 && neras)
 		DMERR_LIMIT("%s: FEC %llu: failed to correct: %d",
 			    v->data_dev->name, (unsigned long long)rsb, r);
@@ -191,7 +191,7 @@ error:
 static int fec_is_erasure(struct dm_verity *v, struct dm_verity_io *io,
 			  u8 *want_digest, u8 *data)
 {
-	if (unlikely(verity_hash(v, verity_io_hash_req(v, io),
+	if (unlikely(verity_hash(v, verity_io_hash_desc(v, io),
 				 data, 1 << v->data_dev_block_bits,
 				 verity_io_real_digest(v, io))))
 		return 0;
@@ -272,7 +272,7 @@ static int fec_read_bufs(struct dm_verity *v, struct dm_verity_io *io,
 					  &is_zero) == 0) {
 			/* skip known zero blocks entirely */
 			if (is_zero)
-				goto done;
+				continue;
 
 			/*
 			 * skip if we have already found the theoretical
@@ -311,14 +311,19 @@ static int fec_alloc_bufs(struct dm_verity *v, struct dm_verity_fec_io *fio)
 {
 	unsigned n;
 
-	if (!fio->rs)
-		fio->rs = mempool_alloc(v->fec->rs_pool, GFP_NOIO);
+	if (!fio->rs) {
+		fio->rs = mempool_alloc(v->fec->rs_pool, 0);
+		if (unlikely(!fio->rs)) {
+			DMERR("failed to allocate RS");
+			return -ENOMEM;
+		}
+	}
 
 	fec_for_each_prealloc_buffer(n) {
 		if (fio->bufs[n])
 			continue;
 
-		fio->bufs[n] = mempool_alloc(v->fec->prealloc_pool, GFP_NOWAIT);
+		fio->bufs[n] = mempool_alloc(v->fec->prealloc_pool, GFP_NOIO);
 		if (unlikely(!fio->bufs[n])) {
 			DMERR("failed to allocate FEC buffer");
 			return -ENOMEM;
@@ -330,15 +335,21 @@ static int fec_alloc_bufs(struct dm_verity *v, struct dm_verity_fec_io *fio)
 		if (fio->bufs[n])
 			continue;
 
-		fio->bufs[n] = mempool_alloc(v->fec->extra_pool, GFP_NOWAIT);
+		fio->bufs[n] = mempool_alloc(v->fec->extra_pool, GFP_NOIO);
 		/* we can manage with even one buffer if necessary */
 		if (unlikely(!fio->bufs[n]))
 			break;
 	}
 	fio->nbufs = n;
 
-	if (!fio->output)
+	if (!fio->output) {
 		fio->output = mempool_alloc(v->fec->output_pool, GFP_NOIO);
+
+		if (!fio->output) {
+			DMERR("failed to allocate FEC page");
+			return -ENOMEM;
+		}
+	}
 
 	return 0;
 }
@@ -389,7 +400,7 @@ static int fec_decode_rsb(struct dm_verity *v, struct dm_verity_io *io,
 	}
 
 	/* Always re-validate the corrected block against the expected hash */
-	r = verity_hash(v, verity_io_hash_req(v, io), fio->output,
+	r = verity_hash(v, verity_io_hash_desc(v, io), fio->output,
 			1 << v->data_dev_block_bits,
 			verity_io_real_digest(v, io));
 	if (unlikely(r < 0))
@@ -853,7 +864,7 @@ int verity_fec_ctr(struct dm_verity *v)
 	}
 
 	/* Reserve space for our per-bio data */
-	ti->per_io_data_size += sizeof(struct dm_verity_fec_io);
+	ti->per_bio_data_size += sizeof(struct dm_verity_fec_io);
 
 	return 0;
 }

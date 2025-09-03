@@ -803,7 +803,7 @@ err:
 	return ret;
 }
 
-static const struct iio_buffer_setup_ops xadc_buffer_ops = {
+static struct iio_buffer_setup_ops xadc_buffer_ops = {
 	.preenable = &xadc_preenable,
 	.postenable = &iio_triggered_buffer_postenable,
 	.predisable = &iio_triggered_buffer_predisable,
@@ -1204,10 +1204,7 @@ static int xadc_probe(struct platform_device *pdev)
 		ret = PTR_ERR(xadc->clk);
 		goto err_free_samplerate_trigger;
 	}
-
-	ret = clk_prepare_enable(xadc->clk);
-	if (ret)
-		goto err_free_samplerate_trigger;
+	clk_prepare_enable(xadc->clk);
 
 	ret = xadc->ops->setup(pdev, indio_dev, irq);
 	if (ret)

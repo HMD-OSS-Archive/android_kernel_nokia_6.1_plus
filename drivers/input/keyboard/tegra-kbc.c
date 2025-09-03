@@ -370,11 +370,8 @@ static int tegra_kbc_start(struct tegra_kbc *kbc)
 {
 	unsigned int debounce_cnt;
 	u32 val = 0;
-	int ret;
 
-	ret = clk_prepare_enable(kbc->clk);
-	if (ret)
-		return ret;
+	clk_prepare_enable(kbc->clk);
 
 	/* Reset the KBC controller to clear all previous status.*/
 	reset_control_assert(kbc->rst);
@@ -555,7 +552,7 @@ static int tegra_kbc_parse_dt(struct tegra_kbc *kbc)
 
 	if (!num_rows || !num_cols || ((num_rows + num_cols) > KBC_MAX_GPIO)) {
 		dev_err(kbc->dev,
-			"keypad rows/columns not properly specified\n");
+			"keypad rows/columns not porperly specified\n");
 		return -EINVAL;
 	}
 

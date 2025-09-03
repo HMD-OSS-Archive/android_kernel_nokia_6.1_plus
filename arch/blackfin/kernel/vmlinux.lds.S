@@ -33,7 +33,6 @@ SECTIONS
 #ifndef CONFIG_SCHEDULE_L1
 		SCHED_TEXT
 #endif
-		CPUIDLE_TEXT
 		LOCK_TEXT
 		IRQENTRY_TEXT
 		SOFTIRQENTRY_TEXT
@@ -114,8 +113,6 @@ SECTIONS
 	}
 	__data_lma = LOADADDR(.data);
 	__data_len = SIZEOF(.data);
-
-	BUG_TABLE
 
 	/* The init section should be last, so when we free it, it goes into
 	 * the general memory pool, and (hopefully) will decrease fragmentation

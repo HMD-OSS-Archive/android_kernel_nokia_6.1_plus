@@ -25,6 +25,7 @@
 #include <linux/types.h>
 #include "wmi.h"
 #include "wil_platform.h"
+#include "ftm.h"
 
 extern bool no_fw_recovery;
 extern unsigned int mtu_max;
@@ -161,6 +162,9 @@ struct RGF_ICR {
 #define RGF_USER_USAGE_6		(0x880018)
 	#define BIT_USER_OOB_MODE		BIT(31)
 	#define BIT_USER_OOB_R2_MODE		BIT(30)
+#define RGF_USER_USAGE_8		(0x880020)
+	#define BIT_USER_PREVENT_DEEP_SLEEP	BIT(0)
+	#define BIT_USER_SUPPORT_T_POWER_ON_0	BIT(1)
 #define RGF_USER_HW_MACHINE_STATE	(0x8801dc)
 	#define HW_MACHINE_BOOT_DONE	(0x3fffffd)
 #define RGF_USER_USER_CPU_0		(0x8801e0)
@@ -191,6 +195,9 @@ struct RGF_ICR {
 #define RGF_USER_SPARROW_M_4			(0x880c50) /* Sparrow */
 	#define BIT_SPARROW_M_4_SEL_SLEEP_OR_REF	BIT(2)
 
+#define RGF_DMA_PEDI_DIF		(0x8812C4) /* struct RGF_PEDI_DIF */
+	#define BIT_DMA_WR_CMD_ATTR_NO_SNOOP		BIT(4)
+	#define BIT_DMA_WR_CMD_ATTR_RELAXED_ORDERING	BIT(5)
 #define RGF_DMA_EP_TX_ICR		(0x881bb4) /* struct RGF_ICR */
 	#define BIT_DMA_EP_TX_ICR_TX_DONE	BIT(0)
 	#define BIT_DMA_EP_TX_ICR_TX_DONE_N(n)	BIT(n+1) /* n = [0..23] */
@@ -556,6 +563,7 @@ struct wil_sta_info {
 	struct wil_tid_crypto_rx tid_crypto_rx[WIL_STA_TID_NUM];
 	struct wil_tid_crypto_rx group_crypto_rx;
 	u8 aid; /* 1-254; 0 if unknown/not reported */
+	bool fst_link_loss;
 };
 
 enum {
@@ -729,6 +737,15 @@ struct wil6210_priv {
 
 	enum wmi_ps_profile_type ps_profile;
 
+	struct wil_ftm_priv ftm;
+	bool tt_data_set;
+	struct wmi_tt_data tt_data;
+	struct {
+		bool enabled;
+		short omni;
+		short direct;
+	} snr_thresh;
+
 	int fw_calib_result;
 
 #ifdef CONFIG_PM
@@ -861,10 +878,12 @@ int wil_up(struct wil6210_priv *wil);
 int __wil_up(struct wil6210_priv *wil);
 int wil_down(struct wil6210_priv *wil);
 int __wil_down(struct wil6210_priv *wil);
+void wil_refresh_fw_capabilities(struct wil6210_priv *wil);
 void wil_mbox_ring_le2cpus(struct wil6210_mbox_ring *r);
 int wil_find_cid(struct wil6210_priv *wil, const u8 *mac);
 void wil_set_ethtoolops(struct net_device *ndev);
 
+void __iomem *wmi_buffer_block(struct wil6210_priv *wil, __le32 ptr, u32 size);
 void __iomem *wmi_buffer(struct wil6210_priv *wil, __le32 ptr);
 void __iomem *wmi_addr(struct wil6210_priv *wil, u32 ptr);
 int wmi_read_hdr(struct wil6210_priv *wil, __le32 ptr,
@@ -901,6 +920,8 @@ int wmi_ps_dev_profile_cfg(struct wil6210_priv *wil,
 int wmi_set_mgmt_retry(struct wil6210_priv *wil, u8 retry_short);
 int wmi_get_mgmt_retry(struct wil6210_priv *wil, u8 *retry_short);
 int wmi_new_sta(struct wil6210_priv *wil, const u8 *mac, u8 aid);
+int wmi_set_tt_cfg(struct wil6210_priv *wil, struct wmi_tt_data *tt_data);
+int wmi_get_tt_cfg(struct wil6210_priv *wil, struct wmi_tt_data *tt_data);
 int wil_addba_rx_request(struct wil6210_priv *wil, u8 cidxtid,
 			 u8 dialog_token, __le16 ba_param_set,
 			 __le16 ba_timeout, __le16 ba_seq_ctrl);
@@ -948,7 +969,8 @@ void wil6210_debugfs_remove(struct wil6210_priv *wil);
 static inline int wil6210_debugfs_init(struct wil6210_priv *wil) { return 0; }
 static inline void wil6210_debugfs_remove(struct wil6210_priv *wil) {}
 #endif
-
+int wil6210_sysfs_init(struct wil6210_priv *wil);
+void wil6210_sysfs_remove(struct wil6210_priv *wil);
 int wil_cid_fill_sinfo(struct wil6210_priv *wil, int cid,
 		       struct station_info *sinfo);
 
@@ -961,6 +983,8 @@ int wmi_pcp_start(struct wil6210_priv *wil, int bi, u8 wmi_nettype,
 		  u8 chan, u8 hidden_ssid, u8 is_go);
 int wmi_pcp_stop(struct wil6210_priv *wil);
 int wmi_led_cfg(struct wil6210_priv *wil, bool enable);
+int wmi_aoa_meas(struct wil6210_priv *wil, const void *mac_addr, u8 chan,
+		 u8 type);
 int wmi_abort_scan(struct wil6210_priv *wil);
 void wil_abort_scan(struct wil6210_priv *wil, bool sync);
 void wil6210_bus_request(struct wil6210_priv *wil, u32 kbps);
@@ -995,6 +1019,7 @@ void wil6210_unmask_irq_rx(struct wil6210_priv *wil);
 
 int wil_iftype_nl2wmi(enum nl80211_iftype type);
 
+int wil_ioctl(struct wil6210_priv *wil, void __user *data, int cmd);
 int wil_request_firmware(struct wil6210_priv *wil, const char *name,
 			 bool load);
 bool wil_fw_verify_file_exists(struct wil6210_priv *wil, const char *name);
@@ -1016,4 +1041,23 @@ void wil_halp_unvote(struct wil6210_priv *wil);
 void wil6210_set_halp(struct wil6210_priv *wil);
 void wil6210_clear_halp(struct wil6210_priv *wil);
 
+void wil_ftm_init(struct wil6210_priv *wil);
+void wil_ftm_deinit(struct wil6210_priv *wil);
+void wil_ftm_stop_operations(struct wil6210_priv *wil);
+void wil_aoa_cfg80211_meas_result(struct wil6210_priv *wil,
+				  struct wil_aoa_meas_result *result);
+
+void wil_ftm_evt_session_ended(struct wil6210_priv *wil,
+			       struct wmi_tof_session_end_event *evt);
+void wil_ftm_evt_per_dest_res(struct wil6210_priv *wil,
+			      struct wmi_tof_ftm_per_dest_res_event *evt);
+void wil_aoa_evt_meas(struct wil6210_priv *wil,
+		      struct wmi_aoa_meas_event *evt,
+		      int len);
+/* link loss */
+int wmi_link_maintain_cfg_write(struct wil6210_priv *wil,
+				const u8 *addr,
+				bool fst_link_loss);
+
+int wmi_set_snr_thresh(struct wil6210_priv *wil, short omni, short direct);
 #endif /* __WIL6210_H__ */

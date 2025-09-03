@@ -500,7 +500,7 @@ static int sprd_verify_port(struct uart_port *port,
 	return 0;
 }
 
-static const struct uart_ops serial_sprd_ops = {
+static struct uart_ops serial_sprd_ops = {
 	.tx_empty = sprd_tx_empty,
 	.get_mctrl = sprd_get_mctrl,
 	.set_mctrl = sprd_set_mctrl,
@@ -519,7 +519,7 @@ static const struct uart_ops serial_sprd_ops = {
 };
 
 #ifdef CONFIG_SERIAL_SPRD_CONSOLE
-static void wait_for_xmitr(struct uart_port *port)
+static inline void wait_for_xmitr(struct uart_port *port)
 {
 	unsigned int status, tmout = 10000;
 
@@ -656,7 +656,7 @@ static int sprd_probe_dt_alias(int index, struct device *dev)
 		return ret;
 
 	ret = of_alias_get_id(np, "serial");
-	if (ret < 0)
+	if (IS_ERR_VALUE(ret))
 		ret = index;
 	else if (ret >= ARRAY_SIZE(sprd_port) || sprd_port[ret] != NULL) {
 		dev_warn(dev, "requested serial port %d not available.\n", ret);

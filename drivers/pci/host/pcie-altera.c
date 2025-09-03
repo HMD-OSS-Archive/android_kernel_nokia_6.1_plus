@@ -1,9 +1,6 @@
 /*
  * Copyright Altera Corporation (C) 2013-2015. All rights reserved
  *
- * Author: Ley Foon Tan <lftan@altera.com>
- * Description: Altera PCIe host controller driver
- *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
  * version 2, as published by the Free Software Foundation.
@@ -20,7 +17,7 @@
 #include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/irqchip/chained_irq.h>
-#include <linux/init.h>
+#include <linux/module.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
 #include <linux/of_pci.h>
@@ -55,32 +52,26 @@
 #define TLP_PAYLOAD_SIZE		0x01
 #define TLP_READ_TAG			0x1d
 #define TLP_WRITE_TAG			0x10
-#define RP_DEVFN			0
-#define TLP_REQ_ID(bus, devfn)		(((bus) << 8) | (devfn))
-#define TLP_CFGRD_DW0(pcie, bus)					\
-    ((((bus == pcie->root_bus_nr) ? TLP_FMTTYPE_CFGRD0			\
-				    : TLP_FMTTYPE_CFGRD1) << 24) |	\
-     TLP_PAYLOAD_SIZE)
-#define TLP_CFGWR_DW0(pcie, bus)					\
-    ((((bus == pcie->root_bus_nr) ? TLP_FMTTYPE_CFGWR0			\
-				    : TLP_FMTTYPE_CFGWR1) << 24) |	\
-     TLP_PAYLOAD_SIZE)
-#define TLP_CFG_DW1(pcie, tag, be)	\
-    (((TLP_REQ_ID(pcie->root_bus_nr,  RP_DEVFN)) << 16) | (tag << 8) | (be))
+#define TLP_CFG_DW0(fmttype)		(((fmttype) << 24) | TLP_PAYLOAD_SIZE)
+#define TLP_CFG_DW1(reqid, tag, be)	(((reqid) << 16) | (tag << 8) | (be))
 #define TLP_CFG_DW2(bus, devfn, offset)	\
 				(((bus) << 24) | ((devfn) << 16) | (offset))
-#define TLP_COMP_STATUS(s)		(((s) >> 13) & 7)
+#define TLP_REQ_ID(bus, devfn)		(((bus) << 8) | (devfn))
+#define TLP_COMP_STATUS(s)		(((s) >> 12) & 7)
 #define TLP_HDR_SIZE			3
 #define TLP_LOOP			500
+#define RP_DEVFN			0
 
 #define LINK_UP_TIMEOUT			HZ
 #define LINK_RETRAIN_TIMEOUT		HZ
+
+#define INTX_NUM			4
 
 #define DWORD_MASK			3
 
 struct altera_pcie {
 	struct platform_device	*pdev;
-	void __iomem		*cra_base;	/* DT Cra */
+	void __iomem		*cra_base;
 	int			irq;
 	u8			root_bus_nr;
 	struct irq_domain	*irq_domain;
@@ -137,7 +128,7 @@ static void tlp_write_tx(struct altera_pcie *pcie,
 	cra_writel(pcie, tlp_rp_regdata->ctrl, RP_TX_CNTRL);
 }
 
-static bool altera_pcie_valid_device(struct altera_pcie *pcie,
+static bool altera_pcie_valid_config(struct altera_pcie *pcie,
 				     struct pci_bus *bus, int dev)
 {
 	/* If there is no link, then there is no device */
@@ -148,6 +139,13 @@ static bool altera_pcie_valid_device(struct altera_pcie *pcie,
 
 	/* access only one slot on each root port */
 	if (bus->number == pcie->root_bus_nr && dev > 0)
+		return false;
+
+	/*
+	 * Do not read more than one device on the bus directly attached
+	 * to root port, root port can only attach to one downstream port.
+	 */
+	if (bus->primary == pcie->root_bus_nr && dev > 0)
 		return false;
 
 	 return true;
@@ -224,8 +222,13 @@ static int tlp_cfg_dword_read(struct altera_pcie *pcie, u8 bus, u32 devfn,
 {
 	u32 headers[TLP_HDR_SIZE];
 
-	headers[0] = TLP_CFGRD_DW0(pcie, bus);
-	headers[1] = TLP_CFG_DW1(pcie, TLP_READ_TAG, byte_en);
+	if (bus == pcie->root_bus_nr)
+		headers[0] = TLP_CFG_DW0(TLP_FMTTYPE_CFGRD0);
+	else
+		headers[0] = TLP_CFG_DW0(TLP_FMTTYPE_CFGRD1);
+
+	headers[1] = TLP_CFG_DW1(TLP_REQ_ID(pcie->root_bus_nr, RP_DEVFN),
+					TLP_READ_TAG, byte_en);
 	headers[2] = TLP_CFG_DW2(bus, devfn, where);
 
 	tlp_write_packet(pcie, headers, 0, false);
@@ -239,8 +242,13 @@ static int tlp_cfg_dword_write(struct altera_pcie *pcie, u8 bus, u32 devfn,
 	u32 headers[TLP_HDR_SIZE];
 	int ret;
 
-	headers[0] = TLP_CFGWR_DW0(pcie, bus);
-	headers[1] = TLP_CFG_DW1(pcie, TLP_WRITE_TAG, byte_en);
+	if (bus == pcie->root_bus_nr)
+		headers[0] = TLP_CFG_DW0(TLP_FMTTYPE_CFGWR0);
+	else
+		headers[0] = TLP_CFG_DW0(TLP_FMTTYPE_CFGWR1);
+
+	headers[1] = TLP_CFG_DW1(TLP_REQ_ID(pcie->root_bus_nr, RP_DEVFN),
+					TLP_WRITE_TAG, byte_en);
 	headers[2] = TLP_CFG_DW2(bus, devfn, where);
 
 	/* check alignment to Qword */
@@ -338,7 +346,7 @@ static int altera_pcie_cfg_read(struct pci_bus *bus, unsigned int devfn,
 	if (altera_pcie_hide_rc_bar(bus, devfn, where))
 		return PCIBIOS_BAD_REGISTER_NUMBER;
 
-	if (!altera_pcie_valid_device(pcie, bus, PCI_SLOT(devfn))) {
+	if (!altera_pcie_valid_config(pcie, bus, PCI_SLOT(devfn))) {
 		*value = 0xffffffff;
 		return PCIBIOS_DEVICE_NOT_FOUND;
 	}
@@ -355,7 +363,7 @@ static int altera_pcie_cfg_write(struct pci_bus *bus, unsigned int devfn,
 	if (altera_pcie_hide_rc_bar(bus, devfn, where))
 		return PCIBIOS_BAD_REGISTER_NUMBER;
 
-	if (!altera_pcie_valid_device(pcie, bus, PCI_SLOT(devfn)))
+	if (!altera_pcie_valid_config(pcie, bus, PCI_SLOT(devfn)))
 		return PCIBIOS_DEVICE_NOT_FOUND;
 
 	return _altera_pcie_cfg_write(pcie, bus->number, devfn, where, size,
@@ -390,7 +398,6 @@ static int altera_write_cap_word(struct altera_pcie *pcie, u8 busno,
 
 static void altera_wait_link_retrain(struct altera_pcie *pcie)
 {
-	struct device *dev = &pcie->pdev->dev;
 	u16 reg16;
 	unsigned long start_jiffies;
 
@@ -403,7 +410,7 @@ static void altera_wait_link_retrain(struct altera_pcie *pcie)
 			break;
 
 		if (time_after(jiffies, start_jiffies + LINK_RETRAIN_TIMEOUT)) {
-			dev_err(dev, "link retrain timeout\n");
+			dev_err(&pcie->pdev->dev, "link retrain timeout\n");
 			break;
 		}
 		udelay(100);
@@ -416,7 +423,7 @@ static void altera_wait_link_retrain(struct altera_pcie *pcie)
 			break;
 
 		if (time_after(jiffies, start_jiffies + LINK_UP_TIMEOUT)) {
-			dev_err(dev, "link up timeout\n");
+			dev_err(&pcie->pdev->dev, "link up timeout\n");
 			break;
 		}
 		udelay(100);
@@ -457,42 +464,46 @@ static int altera_pcie_intx_map(struct irq_domain *domain, unsigned int irq,
 {
 	irq_set_chip_and_handler(irq, &dummy_irq_chip, handle_simple_irq);
 	irq_set_chip_data(irq, domain->host_data);
+
 	return 0;
 }
 
 static const struct irq_domain_ops intx_domain_ops = {
 	.map = altera_pcie_intx_map,
-	.xlate = pci_irqd_intx_xlate,
 };
 
 static void altera_pcie_isr(struct irq_desc *desc)
 {
 	struct irq_chip *chip = irq_desc_get_chip(desc);
 	struct altera_pcie *pcie;
-	struct device *dev;
 	unsigned long status;
 	u32 bit;
 	u32 virq;
 
 	chained_irq_enter(chip, desc);
 	pcie = irq_desc_get_handler_data(desc);
-	dev = &pcie->pdev->dev;
 
 	while ((status = cra_readl(pcie, P2A_INT_STATUS)
 		& P2A_INT_STS_ALL) != 0) {
-		for_each_set_bit(bit, &status, PCI_NUM_INTX) {
+		for_each_set_bit(bit, &status, INTX_NUM) {
 			/* clear interrupts */
 			cra_writel(pcie, 1 << bit, P2A_INT_STATUS);
 
-			virq = irq_find_mapping(pcie->irq_domain, bit);
+			virq = irq_find_mapping(pcie->irq_domain, bit + 1);
 			if (virq)
 				generic_handle_irq(virq);
 			else
-				dev_err(dev, "unexpected IRQ, INT%d\n", bit);
+				dev_err(&pcie->pdev->dev,
+					"unexpected IRQ, INT%d\n", bit);
 		}
 	}
 
 	chained_irq_exit(chip, desc);
+}
+
+static void altera_pcie_release_of_pci_ranges(struct altera_pcie *pcie)
+{
+	pci_free_resource_list(&pcie->resources);
 }
 
 static int altera_pcie_parse_request_of_pci_ranges(struct altera_pcie *pcie)
@@ -507,25 +518,33 @@ static int altera_pcie_parse_request_of_pci_ranges(struct altera_pcie *pcie)
 	if (err)
 		return err;
 
-	err = devm_request_pci_bus_resources(dev, &pcie->resources);
-	if (err)
-		goto out_release_res;
-
 	resource_list_for_each_entry(win, &pcie->resources) {
-		struct resource *res = win->res;
+		struct resource *parent, *res = win->res;
 
-		if (resource_type(res) == IORESOURCE_MEM)
+		switch (resource_type(res)) {
+		case IORESOURCE_MEM:
+			parent = &iomem_resource;
 			res_valid |= !(res->flags & IORESOURCE_PREFETCH);
+			break;
+		default:
+			continue;
+		}
+
+		err = devm_request_resource(dev, parent, res);
+		if (err)
+			goto out_release_res;
 	}
 
-	if (res_valid)
-		return 0;
+	if (!res_valid) {
+		dev_err(dev, "non-prefetchable memory resource required\n");
+		err = -EINVAL;
+		goto out_release_res;
+	}
 
-	dev_err(dev, "non-prefetchable memory resource required\n");
-	err = -EINVAL;
+	return 0;
 
 out_release_res:
-	pci_free_resource_list(&pcie->resources);
+	altera_pcie_release_of_pci_ranges(pcie);
 	return err;
 }
 
@@ -535,7 +554,7 @@ static int altera_pcie_init_irq_domain(struct altera_pcie *pcie)
 	struct device_node *node = dev->of_node;
 
 	/* Setup INTx */
-	pcie->irq_domain = irq_domain_add_linear(node, PCI_NUM_INTX,
+	pcie->irq_domain = irq_domain_add_linear(node, INTX_NUM + 1,
 					&intx_domain_ops, pcie);
 	if (!pcie->irq_domain) {
 		dev_err(dev, "Failed to get a INTx IRQ domain\n");
@@ -547,23 +566,30 @@ static int altera_pcie_init_irq_domain(struct altera_pcie *pcie)
 
 static int altera_pcie_parse_dt(struct altera_pcie *pcie)
 {
-	struct device *dev = &pcie->pdev->dev;
-	struct platform_device *pdev = pcie->pdev;
 	struct resource *cra;
+	struct platform_device *pdev = pcie->pdev;
 
 	cra = platform_get_resource_byname(pdev, IORESOURCE_MEM, "Cra");
-	pcie->cra_base = devm_ioremap_resource(dev, cra);
-	if (IS_ERR(pcie->cra_base))
+	if (!cra) {
+		dev_err(&pdev->dev, "no Cra memory resource defined\n");
+		return -ENODEV;
+	}
+
+	pcie->cra_base = devm_ioremap_resource(&pdev->dev, cra);
+	if (IS_ERR(pcie->cra_base)) {
+		dev_err(&pdev->dev, "failed to map cra memory\n");
 		return PTR_ERR(pcie->cra_base);
+	}
 
 	/* setup IRQ */
 	pcie->irq = platform_get_irq(pdev, 0);
-	if (pcie->irq < 0) {
-		dev_err(dev, "failed to get IRQ: %d\n", pcie->irq);
-		return pcie->irq;
+	if (pcie->irq <= 0) {
+		dev_err(&pdev->dev, "failed to get IRQ: %d\n", pcie->irq);
+		return -EINVAL;
 	}
 
 	irq_set_chained_handler_and_data(pcie->irq, altera_pcie_isr, pcie);
+
 	return 0;
 }
 
@@ -574,23 +600,20 @@ static void altera_pcie_host_init(struct altera_pcie *pcie)
 
 static int altera_pcie_probe(struct platform_device *pdev)
 {
-	struct device *dev = &pdev->dev;
 	struct altera_pcie *pcie;
 	struct pci_bus *bus;
 	struct pci_bus *child;
-	struct pci_host_bridge *bridge;
 	int ret;
 
-	bridge = devm_pci_alloc_host_bridge(dev, sizeof(*pcie));
-	if (!bridge)
+	pcie = devm_kzalloc(&pdev->dev, sizeof(*pcie), GFP_KERNEL);
+	if (!pcie)
 		return -ENOMEM;
 
-	pcie = pci_host_bridge_priv(bridge);
 	pcie->pdev = pdev;
 
 	ret = altera_pcie_parse_dt(pcie);
 	if (ret) {
-		dev_err(dev, "Parsing DT failed\n");
+		dev_err(&pdev->dev, "Parsing DT failed\n");
 		return ret;
 	}
 
@@ -598,13 +621,13 @@ static int altera_pcie_probe(struct platform_device *pdev)
 
 	ret = altera_pcie_parse_request_of_pci_ranges(pcie);
 	if (ret) {
-		dev_err(dev, "Failed add resources\n");
+		dev_err(&pdev->dev, "Failed add resources\n");
 		return ret;
 	}
 
 	ret = altera_pcie_init_irq_domain(pcie);
 	if (ret) {
-		dev_err(dev, "Failed creating IRQ Domain\n");
+		dev_err(&pdev->dev, "Failed creating IRQ Domain\n");
 		return ret;
 	}
 
@@ -614,20 +637,12 @@ static int altera_pcie_probe(struct platform_device *pdev)
 	cra_writel(pcie, P2A_INT_ENA_ALL, P2A_INT_ENABLE);
 	altera_pcie_host_init(pcie);
 
-	list_splice_init(&pcie->resources, &bridge->windows);
-	bridge->dev.parent = dev;
-	bridge->sysdata = pcie;
-	bridge->busnr = pcie->root_bus_nr;
-	bridge->ops = &altera_pcie_ops;
-	bridge->map_irq = of_irq_parse_and_map_pci;
-	bridge->swizzle_irq = pci_common_swizzle;
+	bus = pci_scan_root_bus(&pdev->dev, pcie->root_bus_nr, &altera_pcie_ops,
+				pcie, &pcie->resources);
+	if (!bus)
+		return -ENOMEM;
 
-	ret = pci_scan_root_bus_bridge(bridge);
-	if (ret < 0)
-		return ret;
-
-	bus = bridge->bus;
-
+	pci_fixup_irqs(pci_common_swizzle, of_irq_parse_and_map_pci);
 	pci_assign_unassigned_bus_resources(bus);
 
 	/* Configure PCI Express setting. */
@@ -635,6 +650,8 @@ static int altera_pcie_probe(struct platform_device *pdev)
 		pcie_bus_configure_settings(child);
 
 	pci_bus_add_devices(bus);
+
+	platform_set_drvdata(pdev, pcie);
 	return ret;
 }
 
@@ -642,6 +659,7 @@ static const struct of_device_id altera_pcie_of_match[] = {
 	{ .compatible = "altr,pcie-root-port-1.0", },
 	{},
 };
+MODULE_DEVICE_TABLE(of, altera_pcie_of_match);
 
 static struct platform_driver altera_pcie_driver = {
 	.probe		= altera_pcie_probe,
@@ -652,4 +670,12 @@ static struct platform_driver altera_pcie_driver = {
 	},
 };
 
-builtin_platform_driver(altera_pcie_driver);
+static int altera_pcie_init(void)
+{
+	return platform_driver_register(&altera_pcie_driver);
+}
+module_init(altera_pcie_init);
+
+MODULE_AUTHOR("Ley Foon Tan <lftan@altera.com>");
+MODULE_DESCRIPTION("Altera PCIe host controller driver");
+MODULE_LICENSE("GPL v2");

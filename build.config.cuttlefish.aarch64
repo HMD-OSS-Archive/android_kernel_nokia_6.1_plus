@@ -1,5 +1,5 @@
 ARCH=arm64
-BRANCH=android-4.14
+BRANCH=android-4.4
 CLANG_TRIPLE=aarch64-linux-gnu-
 CROSS_COMPILE=aarch64-linux-androidkernel-
 DEFCONFIG=cuttlefish_defconfig

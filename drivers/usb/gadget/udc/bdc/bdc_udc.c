@@ -249,7 +249,6 @@ void bdc_sr_uspc(struct bdc *bdc, struct bdc_sr *sreport)
 			disconn = true;
 		else if ((uspc & BDC_PCS) && !BDC_PST(uspc))
 			connected = true;
-		clear_flags |= BDC_PCC;
 	}
 
 	/* Change in VBus and VBus is present */
@@ -260,16 +259,16 @@ void bdc_sr_uspc(struct bdc *bdc, struct bdc_sr *sreport)
 			bdc_softconn(bdc);
 			usb_gadget_set_state(&bdc->gadget, USB_STATE_POWERED);
 		}
-		clear_flags |= BDC_VBC;
+		clear_flags = BDC_VBC;
 	} else if ((uspc & BDC_PRS) || (uspc & BDC_PRC) || disconn) {
 		/* Hot reset, warm reset, 2.0 bus reset or disconn */
 		dev_dbg(bdc->dev, "Port reset or disconn\n");
 		bdc_uspc_disconnected(bdc, disconn);
-		clear_flags |= BDC_PRC;
+		clear_flags = BDC_PCC|BDC_PCS|BDC_PRS|BDC_PRC;
 	} else if ((uspc & BDC_PSC) && (uspc & BDC_PCS)) {
 		/* Change in Link state */
 		handle_link_state_change(bdc, uspc);
-		clear_flags |= BDC_PSC;
+		clear_flags = BDC_PSC|BDC_PCS;
 	}
 
 	/*
@@ -582,13 +581,8 @@ err0:
 
 void bdc_udc_exit(struct bdc *bdc)
 {
-	unsigned long flags;
-
 	dev_dbg(bdc->dev, "%s()\n", __func__);
-	spin_lock_irqsave(&bdc->lock, flags);
 	bdc_ep_disable(bdc->bdc_ep_array[1]);
-	spin_unlock_irqrestore(&bdc->lock, flags);
-
 	usb_del_gadget_udc(&bdc->gadget);
 	bdc_free_ep(bdc);
 }

@@ -47,7 +47,7 @@
 #include <linux/interrupt.h>
 #include <linux/slab.h>
 #include <asm/unaligned.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #define PPP_VERSION	"2.4.2"
 
@@ -697,7 +697,8 @@ ppp_sync_input(struct syncppp *ap, const unsigned char *buf,
 		goto err;
 	}
 
-	skb_put_data(skb, buf, count);
+	p = skb_put(skb, count);
+	memcpy(p, buf, count);
 
 	/* strip address/control field if present */
 	p = skb->data;
@@ -708,10 +709,11 @@ ppp_sync_input(struct syncppp *ap, const unsigned char *buf,
 		p = skb_pull(skb, 2);
 	}
 
-	/* PPP packet length should be >= 2 bytes when protocol field is not
-	 * compressed.
-	 */
-	if (!(p[0] & 0x01) && skb->len < 2)
+	/* decompress protocol field if compressed */
+	if (p[0] & 1) {
+		/* protocol is compressed */
+		skb_push(skb, 1)[0] = 0;
+	} else if (skb->len < 2)
 		goto err;
 
 	/* queue the frame to be processed */

@@ -21,12 +21,14 @@
 #include <asm/memory.h>
 #include <asm/cacheflush.h>
 
-extern const struct dma_map_ops swiotlb_dma_map_ops;
+extern struct dma_map_ops swiotlb_dma_map_ops;
 
-static inline const struct dma_map_ops *get_arch_dma_ops(struct bus_type *bus)
+static inline struct dma_map_ops *get_dma_ops(struct device *dev)
 {
 	return &swiotlb_dma_map_ops;
 }
+
+#include <asm-generic/dma-mapping-common.h>
 
 static inline bool dma_capable(struct device *dev, dma_addr_t addr, size_t size)
 {

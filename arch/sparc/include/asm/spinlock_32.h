@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /* spinlock.h: 32-bit Sparc spinlock support.
  *
  * Copyright (C) 1997 David S. Miller (davem@caip.rutgers.edu)
@@ -10,10 +9,12 @@
 #ifndef __ASSEMBLY__
 
 #include <asm/psr.h>
-#include <asm/barrier.h>
 #include <asm/processor.h> /* for cpu_relax */
 
 #define arch_spin_is_locked(lock) (*((volatile unsigned char *)(lock)) != 0)
+
+#define arch_spin_unlock_wait(lock) \
+	do { while (arch_spin_is_locked(lock)) cpu_relax(); } while (0)
 
 static inline void arch_spin_lock(arch_spinlock_t *lock)
 {
@@ -130,7 +131,7 @@ static inline void arch_write_lock(arch_rwlock_t *rw)
 	*(volatile __u32 *)&lp->lock = ~0U;
 }
 
-static inline void arch_write_unlock(arch_rwlock_t *lock)
+static void inline arch_write_unlock(arch_rwlock_t *lock)
 {
 	__asm__ __volatile__(
 "	st		%%g0, [%0]"

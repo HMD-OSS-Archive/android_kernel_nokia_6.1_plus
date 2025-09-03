@@ -80,24 +80,6 @@ bearing to the OS' logical thread, core or cluster index.
 
 Bindings for cost nodes are defined as follows:
 
-- system-cost node
-
-	Description: Optional. Must be declared within an energy-costs
-	node. A system should contain no more than one system-cost node.
-
-	Systems with no modelled system cost should not provide this
-	node.
-
-	The system-cost node name must be "system-costN" as
-	described in 3 above.
-
-	A system-cost node must be a leaf node with no children.
-
-	Properties for system-cost nodes are described in paragraph
-	5 below.
-
-	Any other configuration is considered invalid.
-
 - cluster-cost node
 
 	Description: must be declared within an energy-costs node. A
@@ -236,11 +218,6 @@ Property added to the cpu node:
 	for clarity.
 
 	Any other configuration is invalid.
-
-- freq-energy-model
-	Description: Optional. Must be declared if the energy model
-	represents frequency/power values. If absent, energy model is
-	by default considered as capacity/power.
 
 ===========================================================
 5 - Example dts

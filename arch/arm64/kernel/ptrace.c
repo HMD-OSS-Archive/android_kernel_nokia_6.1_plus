@@ -22,10 +22,8 @@
 #include <linux/audit.h>
 #include <linux/compat.h>
 #include <linux/kernel.h>
-#include <linux/sched/signal.h>
-#include <linux/sched/task_stack.h>
+#include <linux/sched.h>
 #include <linux/mm.h>
-#include <linux/nospec.h>
 #include <linux/smp.h>
 #include <linux/ptrace.h>
 #include <linux/user.h>
@@ -41,9 +39,9 @@
 #include <linux/elf.h>
 
 #include <asm/compat.h>
+#include <asm/cpufeature.h>
 #include <asm/debug-monitors.h>
 #include <asm/pgtable.h>
-#include <asm/stacktrace.h>
 #include <asm/syscall.h>
 #include <asm/traps.h>
 #include <asm/system_misc.h>
@@ -128,8 +126,7 @@ int regs_query_register_offset(const char *name)
 static bool regs_within_kernel_stack(struct pt_regs *regs, unsigned long addr)
 {
 	return ((addr & ~(THREAD_SIZE - 1))  ==
-		(kernel_stack_pointer(regs) & ~(THREAD_SIZE - 1))) ||
-		on_irq_stack(addr);
+		(kernel_stack_pointer(regs) & ~(THREAD_SIZE - 1)));
 }
 
 /**
@@ -248,20 +245,15 @@ static struct perf_event *ptrace_hbp_get_event(unsigned int note_type,
 
 	switch (note_type) {
 	case NT_ARM_HW_BREAK:
-		if (idx >= ARM_MAX_BRP)
-			goto out;
-		idx = array_index_nospec(idx, ARM_MAX_BRP);
-		bp = tsk->thread.debug.hbp_break[idx];
+		if (idx < ARM_MAX_BRP)
+			bp = tsk->thread.debug.hbp_break[idx];
 		break;
 	case NT_ARM_HW_WATCH:
-		if (idx >= ARM_MAX_WRP)
-			goto out;
-		idx = array_index_nospec(idx, ARM_MAX_WRP);
-		bp = tsk->thread.debug.hbp_watch[idx];
+		if (idx < ARM_MAX_WRP)
+			bp = tsk->thread.debug.hbp_watch[idx];
 		break;
 	}
 
-out:
 	return bp;
 }
 
@@ -274,22 +266,19 @@ static int ptrace_hbp_set_event(unsigned int note_type,
 
 	switch (note_type) {
 	case NT_ARM_HW_BREAK:
-		if (idx >= ARM_MAX_BRP)
-			goto out;
-		idx = array_index_nospec(idx, ARM_MAX_BRP);
-		tsk->thread.debug.hbp_break[idx] = bp;
-		err = 0;
+		if (idx < ARM_MAX_BRP) {
+			tsk->thread.debug.hbp_break[idx] = bp;
+			err = 0;
+		}
 		break;
 	case NT_ARM_HW_WATCH:
-		if (idx >= ARM_MAX_WRP)
-			goto out;
-		idx = array_index_nospec(idx, ARM_MAX_WRP);
-		tsk->thread.debug.hbp_watch[idx] = bp;
-		err = 0;
+		if (idx < ARM_MAX_WRP) {
+			tsk->thread.debug.hbp_watch[idx] = bp;
+			err = 0;
+		}
 		break;
 	}
 
-out:
 	return err;
 }
 
@@ -633,10 +622,6 @@ static int fpr_get(struct task_struct *target, const struct user_regset *regset,
 {
 	struct user_fpsimd_state *uregs;
 	uregs = &target->thread.fpsimd_state.user_fpsimd;
-
-	if (target == current)
-		fpsimd_preserve_current_state();
-
 	return user_regset_copyout(&pos, &count, &kbuf, &ubuf, uregs, 0, -1);
 }
 
@@ -662,10 +647,6 @@ static int tls_get(struct task_struct *target, const struct user_regset *regset,
 		   void *kbuf, void __user *ubuf)
 {
 	unsigned long *tls = &target->thread.tp_value;
-
-	if (target == current)
-		tls_preserve_current_state();
-
 	return user_regset_copyout(&pos, &count, &kbuf, &ubuf, tls, 0, -1);
 }
 
@@ -912,27 +893,21 @@ static int compat_vfp_get(struct task_struct *target,
 {
 	struct user_fpsimd_state *uregs;
 	compat_ulong_t fpscr;
-	int ret, vregs_end_pos;
+	int ret;
 
 	uregs = &target->thread.fpsimd_state.user_fpsimd;
-
-	if (target == current)
-		fpsimd_preserve_current_state();
 
 	/*
 	 * The VFP registers are packed into the fpsimd_state, so they all sit
 	 * nicely together for us. We just need to create the fpscr separately.
 	 */
-	vregs_end_pos = VFP_STATE_SIZE - sizeof(compat_ulong_t);
-	ret = user_regset_copyout(&pos, &count, &kbuf, &ubuf, uregs,
-				  0, vregs_end_pos);
+	ret = user_regset_copyout(&pos, &count, &kbuf, &ubuf, uregs, 0,
+				  VFP_STATE_SIZE - sizeof(compat_ulong_t));
 
 	if (count && !ret) {
 		fpscr = (uregs->fpsr & VFP_FPSCR_STAT_MASK) |
 			(uregs->fpcr & VFP_FPSCR_CTRL_MASK);
-
-		ret = user_regset_copyout(&pos, &count, &kbuf, &ubuf, &fpscr,
-					  vregs_end_pos, VFP_STATE_SIZE);
+		ret = put_user(fpscr, (compat_ulong_t *)ubuf);
 	}
 
 	return ret;
@@ -945,21 +920,20 @@ static int compat_vfp_set(struct task_struct *target,
 {
 	struct user_fpsimd_state *uregs;
 	compat_ulong_t fpscr;
-	int ret, vregs_end_pos;
+	int ret;
+
+	if (pos + count > VFP_STATE_SIZE)
+		return -EIO;
 
 	uregs = &target->thread.fpsimd_state.user_fpsimd;
 
-	vregs_end_pos = VFP_STATE_SIZE - sizeof(compat_ulong_t);
 	ret = user_regset_copyin(&pos, &count, &kbuf, &ubuf, uregs, 0,
-				 vregs_end_pos);
+				 VFP_STATE_SIZE - sizeof(compat_ulong_t));
 
 	if (count && !ret) {
-		ret = user_regset_copyin(&pos, &count, &kbuf, &ubuf, &fpscr,
-					 vregs_end_pos, VFP_STATE_SIZE);
-		if (!ret) {
-			uregs->fpsr = fpscr & VFP_FPSCR_STAT_MASK;
-			uregs->fpcr = fpscr & VFP_FPSCR_CTRL_MASK;
-		}
+		ret = get_user(fpscr, (compat_ulong_t *)ubuf);
+		uregs->fpsr = fpscr & VFP_FPSCR_STAT_MASK;
+		uregs->fpcr = fpscr & VFP_FPSCR_CTRL_MASK;
 	}
 
 	fpsimd_flush_task_state(target);
@@ -1203,7 +1177,9 @@ static int compat_ptrace_gethbpregs(struct task_struct *tsk, compat_long_t num,
 {
 	int ret;
 	u32 kdata;
+	mm_segment_t old_fs = get_fs();
 
+	set_fs(KERNEL_DS);
 	/* Watchpoint */
 	if (num < 0) {
 		ret = compat_ptrace_hbp_get(NT_ARM_HW_WATCH, tsk, num, &kdata);
@@ -1214,6 +1190,7 @@ static int compat_ptrace_gethbpregs(struct task_struct *tsk, compat_long_t num,
 	} else {
 		ret = compat_ptrace_hbp_get(NT_ARM_HW_BREAK, tsk, num, &kdata);
 	}
+	set_fs(old_fs);
 
 	if (!ret)
 		ret = put_user(kdata, data);
@@ -1226,6 +1203,7 @@ static int compat_ptrace_sethbpregs(struct task_struct *tsk, compat_long_t num,
 {
 	int ret;
 	u32 kdata = 0;
+	mm_segment_t old_fs = get_fs();
 
 	if (num == 0)
 		return 0;
@@ -1234,10 +1212,12 @@ static int compat_ptrace_sethbpregs(struct task_struct *tsk, compat_long_t num,
 	if (ret)
 		return ret;
 
+	set_fs(KERNEL_DS);
 	if (num < 0)
 		ret = compat_ptrace_hbp_set(NT_ARM_HW_WATCH, tsk, num, &kdata);
 	else
 		ret = compat_ptrace_hbp_set(NT_ARM_HW_BREAK, tsk, num, &kdata);
+	set_fs(old_fs);
 
 	return ret;
 }
@@ -1367,7 +1347,7 @@ static void tracehook_report_syscall(struct pt_regs *regs,
 	if (dir == PTRACE_SYSCALL_EXIT)
 		tracehook_report_syscall_exit(regs, 0);
 	else if (tracehook_report_syscall_entry(regs))
-		forget_syscall(regs);
+		regs->syscallno = ~0UL;
 
 	regs->regs[regno] = saved_reg;
 }

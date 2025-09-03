@@ -8,7 +8,6 @@
  */
 
 #include <linux/clk.h>
-#include <linux/cpufreq.h>
 #include <linux/cpu_cooling.h>
 #include <linux/delay.h>
 #include <linux/device.h>
@@ -89,7 +88,6 @@ static struct thermal_soc_data thermal_imx6sx_data = {
 };
 
 struct imx_thermal_data {
-	struct cpufreq_policy *policy;
 	struct thermal_zone_device *tz;
 	struct thermal_cooling_device *cdev;
 	enum thermal_device_mode mode;
@@ -248,7 +246,7 @@ static int imx_set_mode(struct thermal_zone_device *tz,
 	}
 
 	data->mode = mode;
-	thermal_zone_device_update(tz, THERMAL_EVENT_UNSPECIFIED);
+	thermal_zone_device_update(tz);
 
 	return 0;
 }
@@ -459,7 +457,7 @@ static irqreturn_t imx_thermal_alarm_irq_thread(int irq, void *dev)
 	dev_dbg(&data->tz->device, "THERMAL ALARM: T > %d\n",
 		data->alarm_temp / 1000);
 
-	thermal_zone_device_update(data->tz, THERMAL_EVENT_UNSPECIFIED);
+	thermal_zone_device_update(data->tz);
 
 	return IRQ_HANDLED;
 }
@@ -473,6 +471,8 @@ MODULE_DEVICE_TABLE(of, of_imx_thermal_match);
 
 static int imx_thermal_probe(struct platform_device *pdev)
 {
+	const struct of_device_id *of_id =
+		of_match_device(of_imx_thermal_match, &pdev->dev);
 	struct imx_thermal_data *data;
 	struct regmap *map;
 	int measure_freq;
@@ -490,11 +490,7 @@ static int imx_thermal_probe(struct platform_device *pdev)
 	}
 	data->tempmon = map;
 
-	data->socdata = of_device_get_match_data(&pdev->dev);
-	if (!data->socdata) {
-		dev_err(&pdev->dev, "no device match found\n");
-		return -ENODEV;
-	}
+	data->socdata = of_id->data;
 
 	/* make sure the IRQ flag is clear before enabling irq on i.MX6SX */
 	if (data->socdata->version == TEMPMON_IMX6SX) {
@@ -527,18 +523,13 @@ static int imx_thermal_probe(struct platform_device *pdev)
 	regmap_write(map, MISC0 + REG_SET, MISC0_REFTOP_SELBIASOFF);
 	regmap_write(map, TEMPSENSE0 + REG_SET, TEMPSENSE0_POWER_DOWN);
 
-	data->policy = cpufreq_cpu_get(0);
-	if (!data->policy) {
-		pr_debug("%s: CPUFreq policy not found\n", __func__);
-		return -EPROBE_DEFER;
-	}
-
-	data->cdev = cpufreq_cooling_register(data->policy);
+	data->cdev = cpufreq_cooling_register(cpu_present_mask);
 	if (IS_ERR(data->cdev)) {
 		ret = PTR_ERR(data->cdev);
-		dev_err(&pdev->dev,
-			"failed to register cpufreq cooling device: %d\n", ret);
-		cpufreq_cpu_put(data->policy);
+		if (ret != -EPROBE_DEFER)
+			dev_err(&pdev->dev,
+				"failed to register cpufreq cooling device: %d\n",
+				ret);
 		return ret;
 	}
 
@@ -549,7 +540,6 @@ static int imx_thermal_probe(struct platform_device *pdev)
 			dev_err(&pdev->dev,
 				"failed to get thermal clk: %d\n", ret);
 		cpufreq_cooling_unregister(data->cdev);
-		cpufreq_cpu_put(data->policy);
 		return ret;
 	}
 
@@ -564,7 +554,6 @@ static int imx_thermal_probe(struct platform_device *pdev)
 	if (ret) {
 		dev_err(&pdev->dev, "failed to enable thermal clk: %d\n", ret);
 		cpufreq_cooling_unregister(data->cdev);
-		cpufreq_cpu_put(data->policy);
 		return ret;
 	}
 
@@ -580,7 +569,6 @@ static int imx_thermal_probe(struct platform_device *pdev)
 			"failed to register thermal zone device %d\n", ret);
 		clk_disable_unprepare(data->thermal_clk);
 		cpufreq_cooling_unregister(data->cdev);
-		cpufreq_cpu_put(data->policy);
 		return ret;
 	}
 
@@ -612,7 +600,6 @@ static int imx_thermal_probe(struct platform_device *pdev)
 		clk_disable_unprepare(data->thermal_clk);
 		thermal_zone_device_unregister(data->tz);
 		cpufreq_cooling_unregister(data->cdev);
-		cpufreq_cpu_put(data->policy);
 		return ret;
 	}
 
@@ -631,7 +618,6 @@ static int imx_thermal_remove(struct platform_device *pdev)
 
 	thermal_zone_device_unregister(data->tz);
 	cpufreq_cooling_unregister(data->cdev);
-	cpufreq_cpu_put(data->policy);
 
 	return 0;
 }
@@ -660,11 +646,8 @@ static int imx_thermal_resume(struct device *dev)
 {
 	struct imx_thermal_data *data = dev_get_drvdata(dev);
 	struct regmap *map = data->tempmon;
-	int ret;
 
-	ret = clk_prepare_enable(data->thermal_clk);
-	if (ret)
-		return ret;
+	clk_prepare_enable(data->thermal_clk);
 	/* Enabled thermal sensor after resume */
 	regmap_write(map, TEMPSENSE0 + REG_CLR, TEMPSENSE0_POWER_DOWN);
 	regmap_write(map, TEMPSENSE0 + REG_SET, TEMPSENSE0_MEASURE_TEMP);

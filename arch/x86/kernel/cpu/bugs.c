@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  *  Copyright (C) 1994  Linus Torvalds
  *
@@ -23,14 +22,13 @@
 #include <asm/processor-flags.h>
 #include <asm/fpu/internal.h>
 #include <asm/msr.h>
-#include <asm/vmx.h>
 #include <asm/paravirt.h>
 #include <asm/alternative.h>
 #include <asm/hypervisor.h>
 #include <asm/pgtable.h>
-#include <asm/set_memory.h>
+#include <asm/cacheflush.h>
 #include <asm/intel-family.h>
-#include <asm/e820/api.h>
+#include <asm/e820.h>
 
 static void __init spectre_v1_select_mitigation(void);
 static void __init spectre_v2_select_mitigation(void);
@@ -47,14 +45,14 @@ static DEFINE_MUTEX(spec_ctrl_mutex);
  * The vendor and possibly platform specific bits which can be modified in
  * x86_spec_ctrl_base.
  */
-static u64 __ro_after_init x86_spec_ctrl_mask = SPEC_CTRL_IBRS;
+static u64 x86_spec_ctrl_mask = SPEC_CTRL_IBRS;
 
 /*
  * AMD specific MSR info for Speculative Store Bypass control.
  * x86_amd_ls_cfg_ssbd_mask is initialized in identify_boot_cpu().
  */
-u64 __ro_after_init x86_amd_ls_cfg_base;
-u64 __ro_after_init x86_amd_ls_cfg_ssbd_mask;
+u64 x86_amd_ls_cfg_base;
+u64 x86_amd_ls_cfg_ssbd_mask;
 
 /* Control conditional STIPB in switch_to() */
 DEFINE_STATIC_KEY_FALSE(switch_to_cond_stibp);
@@ -65,7 +63,6 @@ DEFINE_STATIC_KEY_FALSE(switch_mm_always_ibpb);
 
 /* Control MDS CPU buffer clear before returning to user space */
 DEFINE_STATIC_KEY_FALSE(mds_user_clear);
-EXPORT_SYMBOL_GPL(mds_user_clear);
 /* Control MDS CPU buffer clear before idling (halt, mwait) */
 DEFINE_STATIC_KEY_FALSE(mds_idle_clear);
 EXPORT_SYMBOL_GPL(mds_idle_clear);
@@ -73,12 +70,6 @@ EXPORT_SYMBOL_GPL(mds_idle_clear);
 void __init check_bugs(void)
 {
 	identify_boot_cpu();
-
-	/*
-	 * identify_boot_cpu() initialized SMT support information, let the
-	 * core code know.
-	 */
-	cpu_smt_check_topology();
 
 	if (!IS_ENABLED(CONFIG_SMP)) {
 		pr_info("CPU: ");
@@ -215,8 +206,7 @@ static void x86_amd_ssb_disable(void)
 #define pr_fmt(fmt)	"MDS: " fmt
 
 /* Default mitigation for MDS-affected CPUs */
-static enum mds_mitigations mds_mitigation __ro_after_init = MDS_MITIGATION_FULL;
-static bool mds_nosmt __ro_after_init = false;
+static enum mds_mitigations mds_mitigation = MDS_MITIGATION_FULL;
 
 static const char * const mds_strings[] = {
 	[MDS_MITIGATION_OFF]	= "Vulnerable",
@@ -234,14 +224,8 @@ static void __init mds_select_mitigation(void)
 	if (mds_mitigation == MDS_MITIGATION_FULL) {
 		if (!boot_cpu_has(X86_FEATURE_MD_CLEAR))
 			mds_mitigation = MDS_MITIGATION_VMWERV;
-
 		static_branch_enable(&mds_user_clear);
-
-		if (!boot_cpu_has(X86_BUG_MSBDS_ONLY) &&
-		    (mds_nosmt || cpu_mitigations_auto_nosmt()))
-			cpu_smt_disable(false);
 	}
-
 	pr_info("%s\n", mds_strings[mds_mitigation]);
 }
 
@@ -257,10 +241,6 @@ static int __init mds_cmdline(char *str)
 		mds_mitigation = MDS_MITIGATION_OFF;
 	else if (!strcmp(str, "full"))
 		mds_mitigation = MDS_MITIGATION_FULL;
-	else if (!strcmp(str, "full,nosmt")) {
-		mds_mitigation = MDS_MITIGATION_FULL;
-		mds_nosmt = true;
-	}
 
 	return 0;
 }
@@ -274,7 +254,7 @@ enum spectre_v1_mitigation {
 	SPECTRE_V1_MITIGATION_AUTO,
 };
 
-static enum spectre_v1_mitigation spectre_v1_mitigation __ro_after_init =
+static enum spectre_v1_mitigation spectre_v1_mitigation =
 	SPECTRE_V1_MITIGATION_AUTO;
 
 static const char * const spectre_v1_strings[] = {
@@ -336,7 +316,7 @@ static void __init spectre_v1_select_mitigation(void)
 			 * stop speculation through swapgs.
 			 */
 			if (boot_cpu_has_bug(X86_BUG_SWAPGS) &&
-			    !boot_cpu_has(X86_FEATURE_PTI))
+			    !boot_cpu_has(X86_FEATURE_KAISER))
 				setup_force_cpu_cap(X86_FEATURE_FENCE_SWAPGS_USER);
 
 			/*
@@ -361,13 +341,11 @@ early_param("nospectre_v1", nospectre_v1_cmdline);
 #undef pr_fmt
 #define pr_fmt(fmt)     "Spectre V2 : " fmt
 
-static enum spectre_v2_mitigation spectre_v2_enabled __ro_after_init =
-	SPECTRE_V2_NONE;
+static enum spectre_v2_mitigation spectre_v2_enabled = SPECTRE_V2_NONE;
 
-static enum spectre_v2_user_mitigation spectre_v2_user __ro_after_init =
-	SPECTRE_V2_USER_NONE;
+static enum spectre_v2_user_mitigation spectre_v2_user = SPECTRE_V2_USER_NONE;
 
-#ifdef CONFIG_RETPOLINE
+#ifdef RETPOLINE
 static bool spectre_v2_bad_module;
 
 bool retpoline_module_ok(bool has_retpoline)
@@ -484,8 +462,7 @@ spectre_v2_user_select_mitigation(enum spectre_v2_mitigation_cmd v2_cmd)
 	if (!boot_cpu_has(X86_FEATURE_IBPB) && !boot_cpu_has(X86_FEATURE_STIBP))
 		return;
 
-	if (cpu_smt_control == CPU_SMT_FORCE_DISABLED ||
-	    cpu_smt_control == CPU_SMT_NOT_SUPPORTED)
+	if (!IS_ENABLED(CONFIG_SMP))
 		smt_possible = false;
 
 	cmd = spectre_v2_parse_user_cmdline(v2_cmd);
@@ -552,6 +529,8 @@ set_mode:
 
 static const char * const spectre_v2_strings[] = {
 	[SPECTRE_V2_NONE]			= "Vulnerable",
+	[SPECTRE_V2_RETPOLINE_MINIMAL]		= "Vulnerable: Minimal generic ASM retpoline",
+	[SPECTRE_V2_RETPOLINE_MINIMAL_AMD]	= "Vulnerable: Minimal AMD ASM retpoline",
 	[SPECTRE_V2_RETPOLINE_GENERIC]		= "Mitigation: Full generic retpoline",
 	[SPECTRE_V2_RETPOLINE_AMD]		= "Mitigation: Full AMD retpoline",
 	[SPECTRE_V2_IBRS_ENHANCED]		= "Mitigation: Enhanced IBRS",
@@ -574,6 +553,11 @@ static void __init spec_v2_print_cond(const char *reason, bool secure)
 {
 	if (boot_cpu_has_bug(X86_BUG_SPECTRE_V2) != secure)
 		pr_info("%s selected on command line.\n", reason);
+}
+
+static inline bool retp_compiler(void)
+{
+	return __is_defined(RETPOLINE);
 }
 
 static enum spectre_v2_mitigation_cmd __init spectre_v2_parse_cmdline(void)
@@ -673,12 +657,14 @@ retpoline_auto:
 			pr_err("Spectre mitigation: LFENCE not serializing, switching to generic retpoline\n");
 			goto retpoline_generic;
 		}
-		mode = SPECTRE_V2_RETPOLINE_AMD;
+		mode = retp_compiler() ? SPECTRE_V2_RETPOLINE_AMD :
+					 SPECTRE_V2_RETPOLINE_MINIMAL_AMD;
 		setup_force_cpu_cap(X86_FEATURE_RETPOLINE_AMD);
 		setup_force_cpu_cap(X86_FEATURE_RETPOLINE);
 	} else {
 	retpoline_generic:
-		mode = SPECTRE_V2_RETPOLINE_GENERIC;
+		mode = retp_compiler() ? SPECTRE_V2_RETPOLINE_GENERIC :
+					 SPECTRE_V2_RETPOLINE_MINIMAL;
 		setup_force_cpu_cap(X86_FEATURE_RETPOLINE);
 	}
 
@@ -810,7 +796,7 @@ void arch_smt_update(void)
 #undef pr_fmt
 #define pr_fmt(fmt)	"Speculative Store Bypass: " fmt
 
-static enum ssb_mitigation ssb_mode __ro_after_init = SPEC_STORE_BYPASS_NONE;
+static enum ssb_mitigation ssb_mode = SPEC_STORE_BYPASS_NONE;
 
 /* The kernel command line selection */
 enum ssb_mitigation_cmd {
@@ -1122,14 +1108,6 @@ void x86_spec_ctrl_setup_ap(void)
 #undef pr_fmt
 #define pr_fmt(fmt)	"L1TF: " fmt
 
-/* Default mitigation for L1TF-affected CPUs */
-enum l1tf_mitigations l1tf_mitigation __ro_after_init = L1TF_MITIGATION_FLUSH;
-#if IS_ENABLED(CONFIG_KVM_INTEL)
-EXPORT_SYMBOL_GPL(l1tf_mitigation);
-#endif
-enum vmx_l1d_flush_state l1tf_vmx_mitigation = VMENTER_L1D_FLUSH_AUTO;
-EXPORT_SYMBOL_GPL(l1tf_vmx_mitigation);
-
 /*
  * These CPUs all support 44bits physical address space internally in the
  * cache but CPUID can report a smaller number of physical address bits.
@@ -1176,26 +1154,7 @@ static void __init l1tf_select_mitigation(void)
 	if (!boot_cpu_has_bug(X86_BUG_L1TF))
 		return;
 
-	if (cpu_mitigations_off())
-		l1tf_mitigation = L1TF_MITIGATION_OFF;
-	else if (cpu_mitigations_auto_nosmt())
-		l1tf_mitigation = L1TF_MITIGATION_FLUSH_NOSMT;
-
 	override_cache_bits(&boot_cpu_data);
-
-	switch (l1tf_mitigation) {
-	case L1TF_MITIGATION_OFF:
-	case L1TF_MITIGATION_FLUSH_NOWARN:
-	case L1TF_MITIGATION_FLUSH:
-		break;
-	case L1TF_MITIGATION_FLUSH_NOSMT:
-	case L1TF_MITIGATION_FULL:
-		cpu_smt_disable(false);
-		break;
-	case L1TF_MITIGATION_FULL_FORCE:
-		cpu_smt_disable(true);
-		break;
-	}
 
 #if CONFIG_PGTABLE_LEVELS == 2
 	pr_warn("Kernel not compiled for PAE. No mitigation for L1TF\n");
@@ -1203,8 +1162,7 @@ static void __init l1tf_select_mitigation(void)
 #endif
 
 	half_pa = (u64)l1tf_pfn_limit() << PAGE_SHIFT;
-	if (l1tf_mitigation != L1TF_MITIGATION_OFF &&
-			e820__mapped_any(half_pa, ULLONG_MAX - half_pa, E820_TYPE_RAM)) {
+	if (e820_any_mapped(half_pa, ULLONG_MAX - half_pa, E820_RAM)) {
 		pr_warn("System has more than MAX_PA/2 memory. L1TF mitigation not effective.\n");
 		pr_info("You may make it effective by booting the kernel with mem=%llu parameter.\n",
 				half_pa);
@@ -1215,78 +1173,19 @@ static void __init l1tf_select_mitigation(void)
 
 	setup_force_cpu_cap(X86_FEATURE_L1TF_PTEINV);
 }
-
-static int __init l1tf_cmdline(char *str)
-{
-	if (!boot_cpu_has_bug(X86_BUG_L1TF))
-		return 0;
-
-	if (!str)
-		return -EINVAL;
-
-	if (!strcmp(str, "off"))
-		l1tf_mitigation = L1TF_MITIGATION_OFF;
-	else if (!strcmp(str, "flush,nowarn"))
-		l1tf_mitigation = L1TF_MITIGATION_FLUSH_NOWARN;
-	else if (!strcmp(str, "flush"))
-		l1tf_mitigation = L1TF_MITIGATION_FLUSH;
-	else if (!strcmp(str, "flush,nosmt"))
-		l1tf_mitigation = L1TF_MITIGATION_FLUSH_NOSMT;
-	else if (!strcmp(str, "full"))
-		l1tf_mitigation = L1TF_MITIGATION_FULL;
-	else if (!strcmp(str, "full,force"))
-		l1tf_mitigation = L1TF_MITIGATION_FULL_FORCE;
-
-	return 0;
-}
-early_param("l1tf", l1tf_cmdline);
-
 #undef pr_fmt
 #define pr_fmt(fmt) fmt
 
 #ifdef CONFIG_SYSFS
 
-#define L1TF_DEFAULT_MSG "Mitigation: PTE Inversion"
-
-#if IS_ENABLED(CONFIG_KVM_INTEL)
-static const char * const l1tf_vmx_states[] = {
-	[VMENTER_L1D_FLUSH_AUTO]		= "auto",
-	[VMENTER_L1D_FLUSH_NEVER]		= "vulnerable",
-	[VMENTER_L1D_FLUSH_COND]		= "conditional cache flushes",
-	[VMENTER_L1D_FLUSH_ALWAYS]		= "cache flushes",
-	[VMENTER_L1D_FLUSH_EPT_DISABLED]	= "EPT disabled",
-	[VMENTER_L1D_FLUSH_NOT_REQUIRED]	= "flush not necessary"
-};
-
-static ssize_t l1tf_show_state(char *buf)
-{
-	if (l1tf_vmx_mitigation == VMENTER_L1D_FLUSH_AUTO)
-		return sprintf(buf, "%s\n", L1TF_DEFAULT_MSG);
-
-	if (l1tf_vmx_mitigation == VMENTER_L1D_FLUSH_EPT_DISABLED ||
-	    (l1tf_vmx_mitigation == VMENTER_L1D_FLUSH_NEVER &&
-	     sched_smt_active())) {
-		return sprintf(buf, "%s; VMX: %s\n", L1TF_DEFAULT_MSG,
-			       l1tf_vmx_states[l1tf_vmx_mitigation]);
-	}
-
-	return sprintf(buf, "%s; VMX: %s, SMT %s\n", L1TF_DEFAULT_MSG,
-		       l1tf_vmx_states[l1tf_vmx_mitigation],
-		       sched_smt_active() ? "vulnerable" : "disabled");
-}
-#else
-static ssize_t l1tf_show_state(char *buf)
-{
-	return sprintf(buf, "%s\n", L1TF_DEFAULT_MSG);
-}
-#endif
-
 static ssize_t mds_show_state(char *buf)
 {
+#ifdef CONFIG_HYPERVISOR_GUEST
 	if (boot_cpu_has(X86_FEATURE_HYPERVISOR)) {
 		return sprintf(buf, "%s; SMT Host state unknown\n",
 			       mds_strings[mds_mitigation]);
 	}
+#endif
 
 	if (boot_cpu_has(X86_BUG_MSBDS_ONLY)) {
 		return sprintf(buf, "%s; SMT %s\n", mds_strings[mds_mitigation],
@@ -1336,7 +1235,7 @@ static ssize_t cpu_show_common(struct device *dev, struct device_attribute *attr
 
 	switch (bug) {
 	case X86_BUG_CPU_MELTDOWN:
-		if (boot_cpu_has(X86_FEATURE_PTI))
+		if (boot_cpu_has(X86_FEATURE_KAISER))
 			return sprintf(buf, "Mitigation: PTI\n");
 
 		break;
@@ -1357,7 +1256,7 @@ static ssize_t cpu_show_common(struct device *dev, struct device_attribute *attr
 
 	case X86_BUG_L1TF:
 		if (boot_cpu_has(X86_FEATURE_L1TF_PTEINV))
-			return l1tf_show_state(buf);
+			return sprintf(buf, "Mitigation: PTE Inversion\n");
 		break;
 
 	case X86_BUG_MDS:

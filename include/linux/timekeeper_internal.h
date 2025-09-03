@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * You SHOULD NOT be including this unless you're vsyscall
  * handling code or timekeeping internal code!
@@ -30,8 +29,8 @@
  */
 struct tk_read_base {
 	struct clocksource	*clock;
-	u64			mask;
-	u64			cycle_last;
+	cycle_t			mask;
+	cycle_t			cycle_last;
 	u32			mult;
 	u32			shift;
 	u64			xtime_nsec;
@@ -50,7 +49,6 @@ struct tk_read_base {
  * @offs_tai:		Offset clock monotonic -> clock tai
  * @tai_offset:		The current UTC to TAI offset in seconds
  * @clock_was_set_seq:	The sequence number of clock was set events
- * @cs_was_changed_seq:	The sequence number of clocksource change events
  * @next_leap_ktime:	CLOCK_MONOTONIC time value of a pending leap-second
  * @raw_sec:		CLOCK_MONOTONIC_RAW  time in seconds
  * @cycle_interval:	Number of clock cycles in one NTP interval
@@ -92,12 +90,11 @@ struct timekeeper {
 	ktime_t			offs_tai;
 	s32			tai_offset;
 	unsigned int		clock_was_set_seq;
-	u8			cs_was_changed_seq;
 	ktime_t			next_leap_ktime;
 	u64			raw_sec;
 
 	/* The following members are for timekeeping internal use */
-	u64			cycle_interval;
+	cycle_t			cycle_interval;
 	u64			xtime_interval;
 	s64			xtime_remainder;
 	u64			raw_interval;
@@ -136,7 +133,7 @@ extern void update_vsyscall_tz(void);
 
 extern void update_vsyscall_old(struct timespec *ts, struct timespec *wtm,
 				struct clocksource *c, u32 mult,
-				u64 cycle_last);
+				cycle_t cycle_last);
 extern void update_vsyscall_tz(void);
 
 #else

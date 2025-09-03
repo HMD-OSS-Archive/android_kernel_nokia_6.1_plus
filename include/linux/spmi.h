@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -43,13 +43,11 @@
  * @dev:	Driver model representation of the device.
  * @ctrl:	SPMI controller managing the bus hosting this device.
  * @usid:	This devices' Unique Slave IDentifier.
- * @gsid:	This devices' Global Slave IDentifier.
  */
 struct spmi_device {
 	struct device		dev;
 	struct spmi_controller	*ctrl;
 	u8			usid;
-	u8			gsid;
 };
 
 static inline struct spmi_device *to_spmi_device(struct device *d)
@@ -172,6 +170,19 @@ static inline void spmi_driver_unregister(struct spmi_driver *sdrv)
 #define module_spmi_driver(__spmi_driver) \
 	module_driver(__spmi_driver, spmi_driver_register, \
 			spmi_driver_unregister)
+
+#ifdef CONFIG_QCOM_SHOW_RESUME_IRQ
+extern int msm_show_resume_irq_mask;
+static inline bool spmi_show_resume_irq(void)
+{
+	return msm_show_resume_irq_mask;
+}
+#else
+static inline bool spmi_show_resume_irq(void)
+{
+	return false;
+}
+#endif
 
 int spmi_register_read(struct spmi_device *sdev, u8 addr, u8 *buf);
 int spmi_ext_register_read(struct spmi_device *sdev, u8 addr, u8 *buf,

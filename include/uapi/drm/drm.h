@@ -36,13 +36,7 @@
 #ifndef _DRM_H_
 #define _DRM_H_
 
-#if defined(__KERNEL__)
-
-#include <linux/types.h>
-#include <asm/ioctl.h>
-typedef unsigned int drm_handle_t;
-
-#elif defined(__linux__)
+#if defined(__KERNEL__) || defined(__linux__)
 
 #include <linux/types.h>
 #include <asm/ioctl.h>
@@ -60,7 +54,6 @@ typedef int32_t  __s32;
 typedef uint32_t __u32;
 typedef int64_t  __s64;
 typedef uint64_t __u64;
-typedef size_t   __kernel_size_t;
 typedef unsigned long drm_handle_t;
 
 #endif
@@ -140,11 +133,11 @@ struct drm_version {
 	int version_major;	  /**< Major version */
 	int version_minor;	  /**< Minor version */
 	int version_patchlevel;	  /**< Patch level */
-	__kernel_size_t name_len;	  /**< Length of name buffer */
+	size_t name_len;	  /**< Length of name buffer */
 	char __user *name;	  /**< Name of driver */
-	__kernel_size_t date_len;	  /**< Length of date buffer */
+	size_t date_len;	  /**< Length of date buffer */
 	char __user *date;	  /**< User-space buffer to hold date */
-	__kernel_size_t desc_len;	  /**< Length of desc buffer */
+	size_t desc_len;	  /**< Length of desc buffer */
 	char __user *desc;	  /**< User-space buffer to hold desc */
 };
 
@@ -154,7 +147,7 @@ struct drm_version {
  * \sa drmGetBusid() and drmSetBusId().
  */
 struct drm_unique {
-	__kernel_size_t unique_len;	  /**< Length of unique */
+	size_t unique_len;	  /**< Length of unique */
 	char __user *unique;	  /**< Unique name for driver instantiation */
 };
 
@@ -191,7 +184,7 @@ enum drm_map_type {
 	_DRM_SHM = 2,		  /**< shared, cached */
 	_DRM_AGP = 3,		  /**< AGP/GART */
 	_DRM_SCATTER_GATHER = 4,  /**< Scatter/gather memory for PCI DMA */
-	_DRM_CONSISTENT = 5	  /**< Consistent memory for PCI DMA */
+	_DRM_CONSISTENT = 5,	  /**< Consistent memory for PCI DMA */
 };
 
 /**
@@ -445,7 +438,7 @@ struct drm_draw {
  * DRM_IOCTL_UPDATE_DRAW ioctl argument type.
  */
 typedef enum {
-	DRM_DRAWABLE_CLIPRECTS
+	DRM_DRAWABLE_CLIPRECTS,
 } drm_drawable_info_type_t;
 
 struct drm_update_draw {
@@ -646,9 +639,7 @@ struct drm_gem_open {
 #define DRM_CAP_CURSOR_WIDTH		0x8
 #define DRM_CAP_CURSOR_HEIGHT		0x9
 #define DRM_CAP_ADDFB2_MODIFIERS	0x10
-#define DRM_CAP_PAGE_FLIP_TARGET	0x11
 #define DRM_CAP_CRTC_IN_VBLANK_EVENT	0x12
-#define DRM_CAP_SYNCOBJ		0x13
 
 /** DRM_IOCTL_GET_CAP ioctl argument type */
 struct drm_get_cap {
@@ -686,7 +677,6 @@ struct drm_set_client_cap {
 	__u64 value;
 };
 
-#define DRM_RDWR O_RDWR
 #define DRM_CLOEXEC O_CLOEXEC
 struct drm_prime_handle {
 	__u32 handle;
@@ -696,45 +686,6 @@ struct drm_prime_handle {
 
 	/** Returned dmabuf file descriptor */
 	__s32 fd;
-};
-
-struct drm_syncobj_create {
-	__u32 handle;
-#define DRM_SYNCOBJ_CREATE_SIGNALED (1 << 0)
-	__u32 flags;
-};
-
-struct drm_syncobj_destroy {
-	__u32 handle;
-	__u32 pad;
-};
-
-#define DRM_SYNCOBJ_FD_TO_HANDLE_FLAGS_IMPORT_SYNC_FILE (1 << 0)
-#define DRM_SYNCOBJ_HANDLE_TO_FD_FLAGS_EXPORT_SYNC_FILE (1 << 0)
-struct drm_syncobj_handle {
-	__u32 handle;
-	__u32 flags;
-
-	__s32 fd;
-	__u32 pad;
-};
-
-#define DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL (1 << 0)
-#define DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT (1 << 1)
-struct drm_syncobj_wait {
-	__u64 handles;
-	/* absolute timeout */
-	__s64 timeout_nsec;
-	__u32 count_handles;
-	__u32 flags;
-	__u32 first_signaled; /* only valid when not waiting all */
-	__u32 pad;
-};
-
-struct drm_syncobj_array {
-	__u64 handles;
-	__u32 count_handles;
-	__u32 pad;
 };
 
 #if defined(__cplusplus)
@@ -854,14 +805,6 @@ extern "C" {
 #define DRM_IOCTL_MODE_ATOMIC		DRM_IOWR(0xBC, struct drm_mode_atomic)
 #define DRM_IOCTL_MODE_CREATEPROPBLOB	DRM_IOWR(0xBD, struct drm_mode_create_blob)
 #define DRM_IOCTL_MODE_DESTROYPROPBLOB	DRM_IOWR(0xBE, struct drm_mode_destroy_blob)
-
-#define DRM_IOCTL_SYNCOBJ_CREATE	DRM_IOWR(0xBF, struct drm_syncobj_create)
-#define DRM_IOCTL_SYNCOBJ_DESTROY	DRM_IOWR(0xC0, struct drm_syncobj_destroy)
-#define DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD	DRM_IOWR(0xC1, struct drm_syncobj_handle)
-#define DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE	DRM_IOWR(0xC2, struct drm_syncobj_handle)
-#define DRM_IOCTL_SYNCOBJ_WAIT		DRM_IOWR(0xC3, struct drm_syncobj_wait)
-#define DRM_IOCTL_SYNCOBJ_RESET		DRM_IOWR(0xC4, struct drm_syncobj_array)
-#define DRM_IOCTL_SYNCOBJ_SIGNAL	DRM_IOWR(0xC5, struct drm_syncobj_array)
 
 /**
  * Device specific ioctls should only be in their respective headers

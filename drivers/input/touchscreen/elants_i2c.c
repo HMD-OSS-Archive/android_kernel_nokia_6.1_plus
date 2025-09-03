@@ -298,7 +298,7 @@ static u16 elants_i2c_parse_version(u8 *buf)
 	return get_unaligned_be32(buf) >> 4;
 }
 
-static int elants_i2c_query_hw_version(struct elants_data *ts)
+static int elants_i2c_query_fw_id(struct elants_data *ts)
 {
 	struct i2c_client *client = ts->client;
 	int error, retry_cnt;
@@ -318,13 +318,8 @@ static int elants_i2c_query_hw_version(struct elants_data *ts)
 			error, (int)sizeof(resp), resp);
 	}
 
-	if (error) {
-		dev_err(&client->dev,
-			"Failed to read fw id: %d\n", error);
-		return error;
-	}
-
-	dev_err(&client->dev, "Invalid fw id: %#04x\n", ts->hw_version);
+	dev_err(&client->dev,
+		"Failed to read fw id or fw id is invalid\n");
 
 	return -EINVAL;
 }
@@ -513,7 +508,7 @@ static int elants_i2c_fastboot(struct i2c_client *client)
 static int elants_i2c_initialize(struct elants_data *ts)
 {
 	struct i2c_client *client = ts->client;
-	int error, error2, retry_cnt;
+	int error, retry_cnt;
 	const u8 hello_packet[] = { 0x55, 0x55, 0x55, 0x55 };
 	const u8 recov_packet[] = { 0x55, 0x55, 0x80, 0x80 };
 	u8 buf[HEADER_SIZE];
@@ -558,22 +553,18 @@ static int elants_i2c_initialize(struct elants_data *ts)
 		}
 	}
 
-	/* hw version is available even if device in recovery state */
-	error2 = elants_i2c_query_hw_version(ts);
 	if (!error)
-		error = error2;
-
+		error = elants_i2c_query_fw_id(ts);
 	if (!error)
 		error = elants_i2c_query_fw_version(ts);
-	if (!error)
-		error = elants_i2c_query_test_version(ts);
-	if (!error)
-		error = elants_i2c_query_bc_version(ts);
-	if (!error)
-		error = elants_i2c_query_ts_info(ts);
 
-	if (error)
+	if (error) {
 		ts->iap_mode = ELAN_IAP_RECOVERY;
+	} else {
+		elants_i2c_query_test_version(ts);
+		elants_i2c_query_bc_version(ts);
+		elants_i2c_query_ts_info(ts);
+	}
 
 	return 0;
 }
@@ -1066,7 +1057,7 @@ static struct attribute *elants_attributes[] = {
 	NULL
 };
 
-static const struct attribute_group elants_attribute_group = {
+static struct attribute_group elants_attribute_group = {
 	.attrs = elants_attributes,
 };
 
@@ -1259,6 +1250,8 @@ static int elants_i2c_probe(struct i2c_client *client,
 	input_set_abs_params(ts->input, ABS_MT_PRESSURE, 0, 255, 0, 0);
 	input_abs_set_res(ts->input, ABS_MT_POSITION_X, ts->x_res);
 	input_abs_set_res(ts->input, ABS_MT_POSITION_Y, ts->y_res);
+
+	input_set_drvdata(ts->input, ts);
 
 	error = input_register_device(ts->input);
 	if (error) {

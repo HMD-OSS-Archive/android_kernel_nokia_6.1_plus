@@ -211,7 +211,7 @@ autoconf_fail:
 	ss_loop_sink_desc.bEndpointAddress = fs_loop_sink_desc.bEndpointAddress;
 
 	ret = usb_assign_descriptors(f, fs_loopback_descs, hs_loopback_descs,
-			ss_loopback_descs, NULL);
+			ss_loopback_descs);
 	if (ret)
 		return ret;
 
@@ -591,9 +591,13 @@ DECLARE_USB_FUNCTION(Loopback, loopback_alloc_instance, loopback_alloc);
 
 int __init lb_modinit(void)
 {
-	return usb_function_register(&Loopbackusb_func);
-}
+	int ret;
 
+	ret = usb_function_register(&Loopbackusb_func);
+	if (ret)
+		return ret;
+	return ret;
+}
 void __exit lb_modexit(void)
 {
 	usb_function_unregister(&Loopbackusb_func);

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Copyright IBM Corp. 2008, 2009
  *
@@ -11,7 +10,6 @@
 #include <asm/ftrace.h>
 #include <asm/nospec-insn.h>
 #include <asm/ptrace.h>
-#include <asm/export.h>
 
 	GEN_BR_THUNK %r1
 	GEN_BR_THUNK %r14
@@ -28,8 +26,6 @@ ENTRY(ftrace_stub)
 
 ENTRY(_mcount)
 	BR_EX	%r14
-
-EXPORT_SYMBOL(_mcount)
 
 ENTRY(ftrace_caller)
 	.globl	ftrace_regs_caller

@@ -6,8 +6,6 @@
  * (C) Copyright 1999 Gregory P. Smith
  * (C) Copyright 2001 Brad Hards (bhards@bigpond.net.au)
  *
- * Released under the GPLv2 only.
- * SPDX-License-Identifier: GPL-2.0
  */
 
 #include <linux/kernel.h>
@@ -15,7 +13,7 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/completion.h>
-#include <linux/sched/mm.h>
+#include <linux/sched.h>
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/ioctl.h>
@@ -29,7 +27,7 @@
 #include <linux/random.h>
 #include <linux/pm_qos.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/byteorder.h>
 
 #include "hub.h"
@@ -50,8 +48,13 @@ static void hub_event(struct work_struct *work);
 /* synchronize hub-port add/remove and peering operations */
 DEFINE_MUTEX(usb_port_peer_mutex);
 
+static bool skip_extended_resume_delay = 1;
+module_param(skip_extended_resume_delay, bool, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(skip_extended_resume_delay,
+		"removes extra delay added to finish bus resume");
+
 /* cycle leds on hubs that aren't blinking for attention */
-static bool blinkenlights;
+static bool blinkenlights = 0;
 module_param(blinkenlights, bool, S_IRUGO);
 MODULE_PARM_DESC(blinkenlights, "true to cycle leds on hubs");
 
@@ -80,7 +83,7 @@ MODULE_PARM_DESC(initial_descriptor_timeout,
  * otherwise the new scheme is used.  If that fails and "use_both_schemes"
  * is set, then the driver will make another attempt, using the other scheme.
  */
-static bool old_scheme_first;
+static bool old_scheme_first = 0;
 module_param(old_scheme_first, bool, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(old_scheme_first,
 		 "start with the old device initialization scheme");
@@ -107,8 +110,6 @@ static int hub_port_disable(struct usb_hub *hub, int port1, int set_state);
 
 static inline char *portspeed(struct usb_hub *hub, int portstatus)
 {
-	if (hub_is_superspeedplus(hub->hdev))
-		return "10.0 Gb/s";
 	if (hub_is_superspeed(hub->hdev))
 		return "5.0 Gb/s";
 	if (portstatus & USB_PORT_STAT_HIGH_SPEED)
@@ -294,7 +295,8 @@ static void usb_set_lpm_sel(struct usb_device *udev,
 	udev_lpm_params->sel = total_sel;
 }
 
-static void usb_set_lpm_parameters(struct usb_device *udev)
+//20171108@Bobihlee from QC can't support 0201 LPM. 
+static void __maybe_unused usb_set_lpm_parameters(struct usb_device *udev)
 {
 	struct usb_hub *hub;
 	unsigned int port_to_port_delay;
@@ -551,34 +553,29 @@ static int get_hub_status(struct usb_device *hdev,
 
 /*
  * USB 2.0 spec Section 11.24.2.7
- * USB 3.1 takes into use the wValue and wLength fields, spec Section 10.16.2.6
  */
 static int get_port_status(struct usb_device *hdev, int port1,
-			   void *data, u16 value, u16 length)
+		struct usb_port_status *data)
 {
 	int i, status = -ETIMEDOUT;
 
 	for (i = 0; i < USB_STS_RETRIES &&
 			(status == -ETIMEDOUT || status == -EPIPE); i++) {
 		status = usb_control_msg(hdev, usb_rcvctrlpipe(hdev, 0),
-			USB_REQ_GET_STATUS, USB_DIR_IN | USB_RT_PORT, value,
-			port1, data, length, USB_STS_TIMEOUT);
+			USB_REQ_GET_STATUS, USB_DIR_IN | USB_RT_PORT, 0, port1,
+			data, sizeof(*data), USB_STS_TIMEOUT);
 	}
 	return status;
 }
 
-static int hub_ext_port_status(struct usb_hub *hub, int port1, int type,
-			       u16 *status, u16 *change, u32 *ext_status)
+static int hub_port_status(struct usb_hub *hub, int port1,
+		u16 *status, u16 *change)
 {
 	int ret;
-	int len = 4;
-
-	if (type != HUB_PORT_STATUS)
-		len = 8;
 
 	mutex_lock(&hub->status_mutex);
-	ret = get_port_status(hub->hdev, port1, &hub->status->port, type, len);
-	if (ret < len) {
+	ret = get_port_status(hub->hdev, port1, &hub->status->port);
+	if (ret < 4) {
 		if (ret != -ENODEV)
 			dev_err(hub->intfdev,
 				"%s failed (err = %d)\n", __func__, ret);
@@ -587,20 +584,11 @@ static int hub_ext_port_status(struct usb_hub *hub, int port1, int type,
 	} else {
 		*status = le16_to_cpu(hub->status->port.wPortStatus);
 		*change = le16_to_cpu(hub->status->port.wPortChange);
-		if (type != HUB_PORT_STATUS && ext_status)
-			*ext_status = le32_to_cpu(
-				hub->status->port.dwExtPortStatus);
+
 		ret = 0;
 	}
 	mutex_unlock(&hub->status_mutex);
 	return ret;
-}
-
-static int hub_port_status(struct usb_hub *hub, int port1,
-		u16 *status, u16 *change)
-{
-	return hub_ext_port_status(hub, port1, HUB_PORT_STATUS,
-				   status, change, NULL);
 }
 
 static void kick_hub_wq(struct usb_hub *hub)
@@ -637,6 +625,12 @@ void usb_kick_hub_wq(struct usb_device *hdev)
 	if (hub)
 		kick_hub_wq(hub);
 }
+
+void usb_flush_hub_wq(void)
+{
+	flush_workqueue(hub_wq);
+}
+EXPORT_SYMBOL(usb_flush_hub_wq);
 
 /*
  * Let the USB core know that a USB 3.0 device has sent a Function Wake Device
@@ -1680,28 +1674,10 @@ static void hub_disconnect(struct usb_interface *intf)
 	kref_put(&hub->kref, hub_release);
 }
 
-static bool hub_descriptor_is_sane(struct usb_host_interface *desc)
-{
-	/* Some hubs have a subclass of 1, which AFAICT according to the */
-	/*  specs is not defined, but it works */
-	if (desc->desc.bInterfaceSubClass != 0 &&
-	    desc->desc.bInterfaceSubClass != 1)
-		return false;
-
-	/* Multiple endpoints? What kind of mutant ninja-hub is this? */
-	if (desc->desc.bNumEndpoints != 1)
-		return false;
-
-	/* If the first endpoint is not interrupt IN, we'd better punt! */
-	if (!usb_endpoint_is_int_in(&desc->endpoint[0].desc))
-		return false;
-
-        return true;
-}
-
 static int hub_probe(struct usb_interface *intf, const struct usb_device_id *id)
 {
 	struct usb_host_interface *desc;
+	struct usb_endpoint_descriptor *endpoint;
 	struct usb_device *hdev;
 	struct usb_hub *hub;
 
@@ -1776,17 +1752,33 @@ static int hub_probe(struct usb_interface *intf, const struct usb_device_id *id)
 	}
 #endif
 
-	if (!hub_descriptor_is_sane(desc)) {
+	/* Some hubs have a subclass of 1, which AFAICT according to the */
+	/*  specs is not defined, but it works */
+	if ((desc->desc.bInterfaceSubClass != 0) &&
+	    (desc->desc.bInterfaceSubClass != 1)) {
+descriptor_error:
 		dev_err(&intf->dev, "bad descriptor, ignoring hub\n");
 		return -EIO;
 	}
+
+	/* Multiple endpoints? What kind of mutant ninja-hub is this? */
+	if (desc->desc.bNumEndpoints != 1)
+		goto descriptor_error;
+
+	endpoint = &desc->endpoint[0].desc;
+
+	/* If it's not an interrupt in endpoint, we'd better punt! */
+	if (!usb_endpoint_is_int_in(endpoint))
+		goto descriptor_error;
 
 	/* We found a hub */
 	dev_info(&intf->dev, "USB hub found\n");
 
 	hub = kzalloc(sizeof(*hub), GFP_KERNEL);
-	if (!hub)
+	if (!hub) {
+		dev_dbg(&intf->dev, "couldn't kmalloc hub struct\n");
 		return -ENOMEM;
+	}
 
 	kref_init(&hub->kref);
 	hub->intfdev = &intf->dev;
@@ -1807,7 +1799,7 @@ static int hub_probe(struct usb_interface *intf, const struct usb_device_id *id)
 	if (id->driver_info & HUB_QUIRK_CHECK_PORT_AUTOSUSPEND)
 		hub->quirk_check_port_auto_suspend = 1;
 
-	if (hub_configure(hub, &desc->endpoint[0].desc) >= 0)
+	if (hub_configure(hub, endpoint) >= 0)
 		return 0;
 
 	hub_disconnect(intf);
@@ -2102,7 +2094,7 @@ static void hub_disconnect_children(struct usb_device *udev)
  * Something got disconnected. Get rid of it and all of its children.
  *
  * If *pdev is a normal device then the parent hub must already be locked.
- * If *pdev is a root hub then the caller must hold the usb_bus_idr_lock,
+ * If *pdev is a root hub then the caller must hold the usb_bus_list_lock,
  * which protects the set of root hubs as well as the list of buses.
  *
  * Only hub drivers (including virtual root hub drivers for host
@@ -2406,7 +2398,7 @@ static void set_usb_port_removable(struct usb_device *udev)
  * enumerated.  The device descriptor is available, but not descriptors
  * for any device configuration.  The caller must have locked either
  * the parent hub (if udev is a normal device) or else the
- * usb_bus_idr_lock (if udev is a root hub).  The parent's pointer to
+ * usb_bus_list_lock (if udev is a root hub).  The parent's pointer to
  * udev has already been installed, but udev is not yet visible through
  * sysfs or other filesystem code.
  *
@@ -2589,32 +2581,6 @@ out_authorized:
 	return result;
 }
 
-/*
- * Return 1 if port speed is SuperSpeedPlus, 0 otherwise
- * check it from the link protocol field of the current speed ID attribute.
- * current speed ID is got from ext port status request. Sublink speed attribute
- * table is returned with the hub BOS SSP device capability descriptor
- */
-static int port_speed_is_ssp(struct usb_device *hdev, int speed_id)
-{
-	int ssa_count;
-	u32 ss_attr;
-	int i;
-	struct usb_ssp_cap_descriptor *ssp_cap = hdev->bos->ssp_cap;
-
-	if (!ssp_cap)
-		return 0;
-
-	ssa_count = le32_to_cpu(ssp_cap->bmAttributes) &
-		USB_SSP_SUBLINK_SPEED_ATTRIBS;
-
-	for (i = 0; i <= ssa_count; i++) {
-		ss_attr = le32_to_cpu(ssp_cap->bmSublinkSpeedAttr[i]);
-		if (speed_id == (ss_attr & USB_SSP_SUBLINK_SPEED_SSID))
-			return !!(ss_attr & USB_SSP_SUBLINK_SPEED_LP);
-	}
-	return 0;
-}
 
 /* Returns 1 if @hub is a WUSB root hub, 0 otherwise */
 static unsigned hub_is_wusb(struct usb_hub *hub)
@@ -2622,7 +2588,7 @@ static unsigned hub_is_wusb(struct usb_hub *hub)
 	struct usb_hcd *hcd;
 	if (hub->hdev->parent != NULL)  /* not a root hub? */
 		return 0;
-	hcd = bus_to_hcd(hub->hdev->bus);
+	hcd = container_of(hub->hdev->bus, struct usb_hcd, self);
 	return hcd->wireless;
 }
 
@@ -2633,7 +2599,7 @@ static unsigned hub_is_wusb(struct usb_hub *hub)
 #define SET_CONFIG_TRIES	(2 * (use_both_schemes + 1))
 #define USE_NEW_SCHEME(i)	((i) / 2 == (int)old_scheme_first)
 
-#define HUB_ROOT_RESET_TIME	60	/* times are in msec */
+#define HUB_ROOT_RESET_TIME	50	/* times are in msec */
 #define HUB_SHORT_RESET_TIME	10
 #define HUB_BH_RESET_TIME	50
 #define HUB_LONG_RESET_TIME	200
@@ -2679,7 +2645,6 @@ static int hub_port_wait_reset(struct usb_hub *hub, int port1,
 	int delay_time, ret;
 	u16 portstatus;
 	u16 portchange;
-	u32 ext_portstatus = 0;
 
 	for (delay_time = 0;
 			delay_time < HUB_RESET_TIMEOUT;
@@ -2688,14 +2653,7 @@ static int hub_port_wait_reset(struct usb_hub *hub, int port1,
 		msleep(delay);
 
 		/* read and decode port status */
-		if (hub_is_superspeedplus(hub->hdev))
-			ret = hub_ext_port_status(hub, port1,
-						  HUB_EXT_PORT_STATUS,
-						  &portstatus, &portchange,
-						  &ext_portstatus);
-		else
-			ret = hub_port_status(hub, port1, &portstatus,
-					      &portchange);
+		ret = hub_port_status(hub, port1, &portstatus, &portchange);
 		if (ret < 0)
 			return ret;
 
@@ -2748,10 +2706,6 @@ static int hub_port_wait_reset(struct usb_hub *hub, int port1,
 
 	if (hub_is_wusb(hub))
 		udev->speed = USB_SPEED_WIRELESS;
-	else if (hub_is_superspeedplus(hub->hdev) &&
-		 port_speed_is_ssp(hub->hdev, ext_portstatus &
-				   USB_EXT_PORT_STAT_RX_SPEED_ID))
-		udev->speed = USB_SPEED_SUPER_PLUS;
 	else if (hub_is_superspeed(hub->hdev))
 		udev->speed = USB_SPEED_SUPER;
 	else if (portstatus & USB_PORT_STAT_HIGH_SPEED)
@@ -3084,7 +3038,7 @@ static int usb_disable_remote_wakeup(struct usb_device *udev)
 				USB_CTRL_SET_TIMEOUT);
 	else
 		return usb_control_msg(udev, usb_sndctrlpipe(udev, 0),
-				USB_REQ_SET_FEATURE, USB_RECIP_INTERFACE,
+				USB_REQ_CLEAR_FEATURE, USB_RECIP_INTERFACE,
 				USB_INTRF_FUNC_SUSPEND,	0, NULL, 0,
 				USB_CTRL_SET_TIMEOUT);
 }
@@ -3182,6 +3136,12 @@ int usb_port_suspend(struct usb_device *udev, pm_message_t msg)
 		if (PMSG_IS_AUTO(msg))
 			goto err_ltm;
 	}
+	if (usb_unlocked_disable_lpm(udev)) {
+		dev_err(&udev->dev, "Failed to disable LPM before suspend\n.");
+		status = -ENOMEM;
+		if (PMSG_IS_AUTO(msg))
+			goto err_lpm3;
+	}
 
 	/* see 7.1.7.6 */
 	if (hub_is_superspeed(hub->hdev))
@@ -3208,7 +3168,9 @@ int usb_port_suspend(struct usb_device *udev, pm_message_t msg)
 	if (status) {
 		dev_dbg(&port_dev->dev, "can't suspend, status %d\n", status);
 
-		/* Try to enable USB3 LTM again */
+		/* Try to enable USB3 LPM and LTM again */
+		usb_unlocked_enable_lpm(udev);
+ err_lpm3:
 		usb_enable_ltm(udev);
  err_ltm:
 		/* Try to enable USB2 hardware LPM again */
@@ -3341,7 +3303,7 @@ static int finish_port_resume(struct usb_device *udev)
 /*
  * There are some SS USB devices which take longer time for link training.
  * XHCI specs 4.19.4 says that when Link training is successful, port
- * sets CCS bit to 1. So if SW reads port status before successful link
+ * sets CSC bit to 1. So if SW reads port status before successful link
  * training, then it will not find device to be present.
  * USB Analyzer log with such buggy devices show that in some cases
  * device switch on the RX termination after long delay of host enabling
@@ -3352,17 +3314,14 @@ static int finish_port_resume(struct usb_device *udev)
  * routine implements a 2000 ms timeout for link training. If in a case
  * link trains before timeout, loop will exit earlier.
  *
- * There are also some 2.0 hard drive based devices and 3.0 thumb
- * drives that, when plugged into a 2.0 only port, take a long
- * time to set CCS after VBUS enable.
- *
  * FIXME: If a device was connected before suspend, but was removed
  * while system was asleep, then the loop in the following routine will
  * only exit at timeout.
  *
- * This routine should only be called when persist is enabled.
+ * This routine should only be called when persist is enabled for a SS
+ * device.
  */
-static int wait_for_connected(struct usb_device *udev,
+static int wait_for_ss_port_enable(struct usb_device *udev,
 		struct usb_hub *hub, int *port1,
 		u16 *portchange, u16 *portstatus)
 {
@@ -3379,7 +3338,6 @@ static int wait_for_connected(struct usb_device *udev,
 		delay_ms += 20;
 		status = hub_port_status(hub, *port1, portstatus, portchange);
 	}
-	dev_dbg(&udev->dev, "Waited %dms for CONNECT\n", delay_ms);
 	return status;
 }
 
@@ -3456,7 +3414,9 @@ int usb_port_resume(struct usb_device *udev, pm_message_t msg)
 		/* drive resume for USB_RESUME_TIMEOUT msec */
 		dev_dbg(&udev->dev, "usb %sresume\n",
 				(PMSG_IS_AUTO(msg) ? "auto-" : ""));
-		msleep(USB_RESUME_TIMEOUT);
+		if (!skip_extended_resume_delay)
+			usleep_range(USB_RESUME_TIMEOUT * 1000,
+					(USB_RESUME_TIMEOUT + 1) * 1000);
 
 		/* Virtual root hubs can trigger on GET_PORT_STATUS to
 		 * stop resume signaling.  Then finish the resume
@@ -3465,7 +3425,7 @@ int usb_port_resume(struct usb_device *udev, pm_message_t msg)
 		status = hub_port_status(hub, port1, &portstatus, &portchange);
 
 		/* TRSMRCY = 10 msec */
-		msleep(10);
+		usleep_range(10000, 10500);
 	}
 
  SuspendCleared:
@@ -3482,8 +3442,8 @@ int usb_port_resume(struct usb_device *udev, pm_message_t msg)
 		}
 	}
 
-	if (udev->persist_enabled)
-		status = wait_for_connected(udev, hub, &port1, &portchange,
+	if (udev->persist_enabled && hub_is_superspeed(hub->hdev))
+		status = wait_for_ss_port_enable(udev, hub, &port1, &portchange,
 				&portstatus);
 
 	status = check_port_resume_type(udev,
@@ -3497,8 +3457,9 @@ int usb_port_resume(struct usb_device *udev, pm_message_t msg)
 		/* Try to enable USB2 hardware LPM */
 		usb_enable_usb2_hardware_lpm(udev);
 
-		/* Try to enable USB3 LTM */
+		/* Try to enable USB3 LTM and LPM */
 		usb_enable_ltm(udev);
+		usb_unlocked_enable_lpm(udev);
 	}
 
 	usb_unlock_port(port_dev);
@@ -4073,8 +4034,6 @@ EXPORT_SYMBOL_GPL(usb_unlocked_disable_lpm);
 void usb_enable_lpm(struct usb_device *udev)
 {
 	struct usb_hcd *hcd;
-	struct usb_hub *hub;
-	struct usb_port *port_dev;
 
 	if (!udev || !udev->parent ||
 			udev->speed < USB_SPEED_SUPER ||
@@ -4094,17 +4053,8 @@ void usb_enable_lpm(struct usb_device *udev)
 	if (udev->lpm_disable_count > 0)
 		return;
 
-	hub = usb_hub_to_struct_hub(udev->parent);
-	if (!hub)
-		return;
-
-	port_dev = hub->ports[udev->portnum - 1];
-
-	if (port_dev->usb3_lpm_u1_permit)
-		usb_enable_link_state(hcd, udev, USB3_LPM_U1);
-
-	if (port_dev->usb3_lpm_u2_permit)
-		usb_enable_link_state(hcd, udev, USB3_LPM_U2);
+	usb_enable_link_state(hcd, udev, USB3_LPM_U1);
+	usb_enable_link_state(hcd, udev, USB3_LPM_U2);
 }
 EXPORT_SYMBOL_GPL(usb_enable_lpm);
 
@@ -4377,7 +4327,8 @@ hub_port_init(struct usb_hub *hub, struct usb_device *udev, int port1,
 	enum usb_device_speed	oldspeed = udev->speed;
 	const char		*speed;
 	int			devnum = udev->devnum;
-	const char		*driver_name;
+	char			*error_event[] = {
+				"USB_DEVICE_ERROR=Device_No_Response", NULL };
 
 	/* root hub ports have a slightly longer reset period
 	 * (from USB 2.0 spec, section 7.1.7.5)
@@ -4445,23 +4396,11 @@ hub_port_init(struct usb_hub *hub, struct usb_device *udev, int port1,
 	else
 		speed = usb_speed_string(udev->speed);
 
-	/*
-	 * The controller driver may be NULL if the controller device
-	 * is the middle device between platform device and roothub.
-	 * This middle device may not need a device driver due to
-	 * all hardware control can be at platform device driver, this
-	 * platform device is usually a dual-role USB controller device.
-	 */
-	if (udev->bus->controller->driver)
-		driver_name = udev->bus->controller->driver->name;
-	else
-		driver_name = udev->bus->sysdev->driver->name;
-
 	if (udev->speed < USB_SPEED_SUPER)
 		dev_info(&udev->dev,
 				"%s %s USB device number %d using %s\n",
 				(udev->config) ? "reset" : "new", speed,
-				devnum, driver_name);
+				devnum, udev->bus->controller->driver->name);
 
 	/* Set up TT records, if needed  */
 	if (hdev->tt) {
@@ -4565,6 +4504,8 @@ hub_port_init(struct usb_hub *hub, struct usb_device *udev, int port1,
 				if (r != -ENODEV)
 					dev_err(&udev->dev, "device descriptor read/64, error %d\n",
 							r);
+				kobject_uevent_env(&udev->parent->dev.kobj,
+						KOBJ_CHANGE, error_event);
 				retval = -EMSGSIZE;
 				continue;
 			}
@@ -4595,7 +4536,7 @@ hub_port_init(struct usb_hub *hub, struct usb_device *udev, int port1,
 						"%s SuperSpeed%s USB device number %d using %s\n",
 						(udev->config) ? "reset" : "new",
 					 (udev->speed == USB_SPEED_SUPER_PLUS) ? "Plus" : "",
-					 devnum, driver_name);
+						devnum, udev->bus->controller->driver->name);
 			}
 
 			/* cope with hardware quirkiness:
@@ -4617,6 +4558,8 @@ hub_port_init(struct usb_hub *hub, struct usb_device *udev, int port1,
 				dev_err(&udev->dev,
 					"device descriptor read/8, error %d\n",
 					retval);
+			kobject_uevent_env(&udev->parent->dev.kobj,
+						KOBJ_CHANGE, error_event);
 			if (retval >= 0)
 				retval = -EMSGSIZE;
 		} else {
@@ -4676,11 +4619,14 @@ hub_port_init(struct usb_hub *hub, struct usb_device *udev, int port1,
 	usb_detect_quirks(udev);
 
 	if (udev->wusb == 0 && le16_to_cpu(udev->descriptor.bcdUSB) >= 0x0201) {
-		retval = usb_get_bos_descriptor(udev);
+		//20171108@Bobihlee from QC can't support 0201 LPM. ,Begin 
+		dev_dbg(&udev->dev, "from QC can't support 0201 LPM \n");
+/*		retval = usb_get_bos_descriptor(udev);
 		if (!retval) {
 			udev->lpm_capable = usb_device_supports_lpm(udev);
 			usb_set_lpm_parameters(udev);
-		}
+		} */
+		//20171108@Bobihlee from QC can't support 0201 LPM. ,End 
 	}
 
 	retval = 0;
@@ -5394,10 +5340,11 @@ static int descriptors_changed(struct usb_device *udev,
 	}
 
 	buf = kmalloc(len, GFP_NOIO);
-	if (!buf)
+	if (buf == NULL) {
+		dev_err(&udev->dev, "no mem to re-read configs after reset\n");
 		/* assume the worst */
 		return 1;
-
+	}
 	for (index = 0; index < udev->descriptor.bNumConfigurations; index++) {
 		old_length = le16_to_cpu(udev->config[index].desc.wTotalLength);
 		length = usb_get_descriptor(udev, USB_DT_CONFIG, index, buf,

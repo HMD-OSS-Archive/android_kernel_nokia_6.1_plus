@@ -11,9 +11,6 @@
 #ifndef _XTENSA_SPINLOCK_H
 #define _XTENSA_SPINLOCK_H
 
-#include <asm/barrier.h>
-#include <asm/processor.h>
-
 /*
  * spinlock
  *
@@ -32,6 +29,8 @@
  */
 
 #define arch_spin_is_locked(x) ((x)->slock != 0)
+#define arch_spin_unlock_wait(lock) \
+	do { while (arch_spin_is_locked(lock)) cpu_relax(); } while (0)
 
 #define arch_spin_lock_flags(lock, flags) arch_spin_lock(lock)
 

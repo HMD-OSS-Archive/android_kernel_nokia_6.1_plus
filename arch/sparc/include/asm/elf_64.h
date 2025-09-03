@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ASM_SPARC64_ELF_H
 #define __ASM_SPARC64_ELF_H
 
@@ -8,7 +7,7 @@
 
 #include <asm/ptrace.h>
 #include <asm/processor.h>
-#include <asm/extable_64.h>
+#include <asm/uaccess.h>
 #include <asm/spitfire.h>
 
 /*

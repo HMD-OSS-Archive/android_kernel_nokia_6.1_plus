@@ -33,24 +33,24 @@ config ION_TEGRA
 	help
 	  Choose this option if you wish to use ion on an nVidia Tegra.
 
-config ION_HISI
-	tristate "Ion for Hisilicon"
-	depends on ARCH_HISI && ION
-	select ION_OF
+config ION_POOL_CACHE_POLICY
+	bool "Ion set page pool cache policy"
+	depends on ION && X86
+	default y if X86
 	help
-	  Choose this option if you wish to use ion on Hisilicon Platform.
+	  Choose this option if need to explicity set cache policy of the
+	  pages in the page pool.
 
-source "drivers/staging/android/ion/hisilicon/Kconfig"
-
-source "drivers/staging/android/ion/mtk/Kconfig"
-
-config ION_OF
-	bool "Devicetree support for Ion"
-	depends on ION && OF_ADDRESS
+config ION_MSM
+	tristate "Ion for MSM"
+	depends on ARCH_QCOM && ION
+	select MSM_SECURE_BUFFER
 	help
-	  Provides base support for defining Ion heaps in devicetree
-	  and setting them up. Also includes functions for platforms
-	  to parse the devicetree and expand for their own custom
-	  extensions
+	  Choose this option if you wish to use ion on an MSM target.
 
-	  If using Ion and devicetree, you should say Y here
+config ALLOC_BUFFERS_IN_4K_CHUNKS
+	bool "Turns off allocation optimization and allocate only 4K pages"
+	depends on ARCH_QCOM && ION
+	help
+          Choose this option if you want ION to allocate buffers in
+          only 4KB chunks.

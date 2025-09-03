@@ -27,7 +27,6 @@
 #define VERITY_TABLE_ARGS 10
 #define VERITY_COMMANDLINE_PARAM_LENGTH 20
 #define BUILD_VARIANT 20
-#define SECURITY_FUSED 10
 
 /*
  * <subject>:<sha1-id> is the format for the identifier.
@@ -112,8 +111,6 @@ extern struct target_type linear_target;
 
 extern void dm_linear_dtr(struct dm_target *ti);
 extern int dm_linear_map(struct dm_target *ti, struct bio *bio);
-extern int dm_linear_end_io(struct dm_target *ti, struct bio *bio,
-			 blk_status_t *error);
 extern void dm_linear_status(struct dm_target *ti, status_type_t type,
 			unsigned status_flags, char *result, unsigned maxlen);
 extern int dm_linear_prepare_ioctl(struct dm_target *ti,
@@ -121,9 +118,4 @@ extern int dm_linear_prepare_ioctl(struct dm_target *ti,
 extern int dm_linear_iterate_devices(struct dm_target *ti,
 			iterate_devices_callout_fn fn, void *data);
 extern int dm_linear_ctr(struct dm_target *ti, unsigned int argc, char **argv);
-extern long dm_linear_dax_direct_access(struct dm_target *ti, pgoff_t pgoff,
-					long nr_pages, void **kaddr,
-					pfn_t *pfn);
-extern size_t dm_linear_dax_copy_from_iter(struct dm_target *ti, pgoff_t pgoff,
-		void *addr, size_t bytes, struct iov_iter *i);
 #endif /* DM_ANDROID_VERITY_H */

@@ -22,7 +22,6 @@
 #include <linux/posix_acl_xattr.h>
 #include <linux/posix_acl.h>
 #include <linux/sched.h>
-#include <linux/sched/mm.h>
 #include <linux/slab.h>
 
 #include "ctree.h"
@@ -38,10 +37,10 @@ struct posix_acl *btrfs_get_acl(struct inode *inode, int type)
 
 	switch (type) {
 	case ACL_TYPE_ACCESS:
-		name = XATTR_NAME_POSIX_ACL_ACCESS;
+		name = POSIX_ACL_XATTR_ACCESS;
 		break;
 	case ACL_TYPE_DEFAULT:
-		name = XATTR_NAME_POSIX_ACL_DEFAULT;
+		name = POSIX_ACL_XATTR_DEFAULT;
 		break;
 	default:
 		BUG();
@@ -49,19 +48,23 @@ struct posix_acl *btrfs_get_acl(struct inode *inode, int type)
 
 	size = __btrfs_getxattr(inode, name, "", 0);
 	if (size > 0) {
-		value = kzalloc(size, GFP_KERNEL);
+		value = kzalloc(size, GFP_NOFS);
 		if (!value)
 			return ERR_PTR(-ENOMEM);
 		size = __btrfs_getxattr(inode, name, value, size);
 	}
 	if (size > 0) {
 		acl = posix_acl_from_xattr(&init_user_ns, value, size);
-	} else if (size == -ERANGE || size == -ENODATA || size == 0) {
+	} else if (size == -ENOENT || size == -ENODATA || size == 0) {
+		/* FIXME, who returns -ENOENT?  I think nobody */
 		acl = NULL;
 	} else {
 		acl = ERR_PTR(-EIO);
 	}
 	kfree(value);
+
+	if (!IS_ERR(acl))
+		set_cached_acl(inode, type, acl);
 
 	return acl;
 }
@@ -78,28 +81,20 @@ static int __btrfs_set_acl(struct btrfs_trans_handle *trans,
 
 	switch (type) {
 	case ACL_TYPE_ACCESS:
-		name = XATTR_NAME_POSIX_ACL_ACCESS;
+		name = POSIX_ACL_XATTR_ACCESS;
 		break;
 	case ACL_TYPE_DEFAULT:
 		if (!S_ISDIR(inode->i_mode))
 			return acl ? -EINVAL : 0;
-		name = XATTR_NAME_POSIX_ACL_DEFAULT;
+		name = POSIX_ACL_XATTR_DEFAULT;
 		break;
 	default:
 		return -EINVAL;
 	}
 
 	if (acl) {
-		unsigned int nofs_flag;
-
 		size = posix_acl_xattr_size(acl->a_count);
-		/*
-		 * We're holding a transaction handle, so use a NOFS memory
-		 * allocation context to avoid deadlock if reclaim happens.
-		 */
-		nofs_flag = memalloc_nofs_save();
-		value = kmalloc(size, GFP_KERNEL);
-		memalloc_nofs_restore(nofs_flag);
+		value = kmalloc(size, GFP_NOFS);
 		if (!value) {
 			ret = -ENOMEM;
 			goto out;

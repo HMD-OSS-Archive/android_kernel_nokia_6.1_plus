@@ -1,9 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ASM_SPINLOCK_H
 #define __ASM_SPINLOCK_H
-
-#include <asm/barrier.h>
-#include <asm/processor.h>
 
 #ifdef CONFIG_METAG_ATOMICITY_LOCK1
 #include <asm/spinlock_lock1.h>
@@ -11,10 +7,8 @@
 #include <asm/spinlock_lnkget.h>
 #endif
 
-/*
- * both lock1 and lnkget are test-and-set spinlocks with 0 unlocked and 1
- * locked.
- */
+#define arch_spin_unlock_wait(lock) \
+	do { while (arch_spin_is_locked(lock)) cpu_relax(); } while (0)
 
 #define arch_spin_lock_flags(lock, flags) arch_spin_lock(lock)
 

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * linux/kernel/irq/spurious.c
  *
@@ -176,9 +175,7 @@ out:
 
 static inline int bad_action_ret(irqreturn_t action_ret)
 {
-	unsigned int r = action_ret;
-
-	if (likely(r <= (IRQ_HANDLED | IRQ_WAKE_THREAD)))
+	if (likely(action_ret <= (IRQ_HANDLED | IRQ_WAKE_THREAD)))
 		return 0;
 	return 1;
 }
@@ -214,12 +211,14 @@ static void __report_bad_irq(struct irq_desc *desc, irqreturn_t action_ret)
 	 * desc->lock here. See synchronize_irq().
 	 */
 	raw_spin_lock_irqsave(&desc->lock, flags);
-	for_each_action_of_desc(desc, action) {
+	action = desc->action;
+	while (action) {
 		printk(KERN_ERR "[<%p>] %pf", action->handler, action->handler);
 		if (action->thread_fn)
 			printk(KERN_CONT " threaded [<%p>] %pf",
 					action->thread_fn, action->thread_fn);
 		printk(KERN_CONT "\n");
+		action = action->next;
 	}
 	raw_spin_unlock_irqrestore(&desc->lock, flags);
 }

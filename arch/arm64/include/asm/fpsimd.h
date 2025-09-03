@@ -41,6 +41,16 @@ struct fpsimd_state {
 	unsigned int cpu;
 };
 
+/*
+ * Struct for stacking the bottom 'n' FP/SIMD registers.
+ */
+struct fpsimd_partial_state {
+	u32		fpsr;
+	u32		fpcr;
+	u32		num_regs;
+	__uint128_t	vregs[32];
+};
+
 
 #if defined(__KERNEL__) && defined(CONFIG_COMPAT)
 /* Masks for extracting the FPSR and FPCR from the FPSCR */
@@ -67,9 +77,17 @@ extern void fpsimd_update_current_state(struct fpsimd_state *state);
 
 extern void fpsimd_flush_task_state(struct task_struct *target);
 
-/* For use by EFI runtime services calls only */
-extern void __efi_fpsimd_begin(void);
-extern void __efi_fpsimd_end(void);
+extern void fpsimd_save_partial_state(struct fpsimd_partial_state *state,
+				      u32 num_regs);
+extern void fpsimd_load_partial_state(struct fpsimd_partial_state *state);
+
+#ifdef CONFIG_ENABLE_FP_SIMD_SETTINGS
+extern void fpsimd_disable_trap(void);
+extern void fpsimd_enable_trap(void);
+#else
+static inline void fpsimd_disable_trap(void) {}
+static inline void fpsimd_enable_trap(void) {}
+#endif
 
 #endif
 

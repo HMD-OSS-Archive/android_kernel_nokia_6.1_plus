@@ -2,6 +2,7 @@
 #define _ASM_X86_APIC_H
 
 #include <linux/cpumask.h>
+#include <linux/pm.h>
 
 #include <asm/alternative.h>
 #include <asm/cpufeature.h>
@@ -10,7 +11,7 @@
 #include <asm/fixmap.h>
 #include <asm/mpspec.h>
 #include <asm/msr.h>
-#include <asm/hardirq.h>
+#include <asm/idle.h>
 
 #define ARCH_APICTIMER_STOPS_ON_C3	1
 
@@ -20,11 +21,6 @@
 #define APIC_QUIET   0
 #define APIC_VERBOSE 1
 #define APIC_DEBUG   2
-
-/* Macros for apic_extnmi which controls external NMI masking */
-#define APIC_EXTNMI_BSP		0 /* Default */
-#define APIC_EXTNMI_ALL		1
-#define APIC_EXTNMI_NONE	2
 
 /*
  * Define the default level of output to be very little
@@ -134,7 +130,6 @@ extern void init_apic_mappings(void);
 void register_lapic_address(unsigned long address);
 extern void setup_boot_APIC_clock(void);
 extern void setup_secondary_APIC_clock(void);
-extern void lapic_update_tsc_freq(void);
 extern int APIC_init_uniprocessor(void);
 
 #ifdef CONFIG_X86_64
@@ -170,7 +165,6 @@ static inline void init_apic_mappings(void) { }
 static inline void disable_local_APIC(void) { }
 # define setup_boot_APIC_clock x86_init_noop
 # define setup_secondary_APIC_clock x86_init_noop
-static inline void lapic_update_tsc_freq(void) { }
 #endif /* !CONFIG_X86_LOCAL_APIC */
 
 #ifdef CONFIG_X86_X2APIC
@@ -195,7 +189,7 @@ static inline void native_apic_msr_write(u32 reg, u32 v)
 
 static inline void native_apic_msr_eoi_write(u32 reg, u32 v)
 {
-	__wrmsr(APIC_BASE_MSR + (APIC_EOI >> 4), APIC_EOI_ACK, 0);
+	wrmsr(APIC_BASE_MSR + (APIC_EOI >> 4), APIC_EOI_ACK, 0);
 }
 
 static inline u32 native_apic_msr_read(u32 reg)
@@ -240,10 +234,10 @@ extern void __init check_x2apic(void);
 extern void x2apic_setup(void);
 static inline int x2apic_enabled(void)
 {
-	return boot_cpu_has(X86_FEATURE_X2APIC) && apic_is_x2apic_enabled();
+	return cpu_has_x2apic && apic_is_x2apic_enabled();
 }
 
-#define x2apic_supported()	(boot_cpu_has(X86_FEATURE_X2APIC))
+#define x2apic_supported()	(cpu_has_x2apic)
 #else /* !CONFIG_X86_X2APIC */
 static inline void check_x2apic(void) { }
 static inline void x2apic_setup(void) { }
@@ -253,7 +247,11 @@ static inline int x2apic_enabled(void) { return 0; }
 #define	x2apic_supported()	(0)
 #endif /* !CONFIG_X86_X2APIC */
 
-struct irq_data;
+#ifdef CONFIG_X86_64
+#define	SET_APIC_ID(x)		(apic->set_apic_id(x))
+#else
+
+#endif
 
 /*
  * Copyright 2004 James Cleverdon, IBM.
@@ -296,15 +294,14 @@ struct apic {
 	int (*phys_pkg_id)(int cpuid_apic, int index_msb);
 
 	unsigned int (*get_apic_id)(unsigned long x);
-	/* Can't be NULL on 64-bit */
 	unsigned long (*set_apic_id)(unsigned int id);
+	unsigned long apic_id_mask;
 
-	int (*cpu_mask_to_apicid)(const struct cpumask *cpumask,
-				  struct irq_data *irqdata,
-				  unsigned int *apicid);
+	int (*cpu_mask_to_apicid_and)(const struct cpumask *cpumask,
+				      const struct cpumask *andmask,
+				      unsigned int *apicid);
 
 	/* ipi */
-	void (*send_IPI)(int cpu, int vector);
 	void (*send_IPI_mask)(const struct cpumask *mask, int vector);
 	void (*send_IPI_mask_allbutself)(const struct cpumask *mask,
 					 int vector);
@@ -328,7 +325,6 @@ struct apic {
 	 * on write for EOI.
 	 */
 	void (*eoi_write)(u32 reg, u32 v);
-	void (*native_eoi_write)(u32 reg, u32 v);
 	u64 (*icr_read)(void);
 	void (*icr_write)(u32 low, u32 high);
 	void (*wait_icr_idle)(void);
@@ -543,12 +539,28 @@ static inline int default_phys_pkg_id(int cpuid_apic, int index_msb)
 
 #endif
 
-extern int flat_cpu_mask_to_apicid(const struct cpumask *cpumask,
-				   struct irq_data *irqdata,
-				   unsigned int *apicid);
-extern int default_cpu_mask_to_apicid(const struct cpumask *cpumask,
-				      struct irq_data *irqdata,
-				      unsigned int *apicid);
+static inline int
+flat_cpu_mask_to_apicid_and(const struct cpumask *cpumask,
+			    const struct cpumask *andmask,
+			    unsigned int *apicid)
+{
+	unsigned long cpu_mask = cpumask_bits(cpumask)[0] &
+				 cpumask_bits(andmask)[0] &
+				 cpumask_bits(cpu_online_mask)[0] &
+				 APIC_ALL_CPUS;
+
+	if (likely(cpu_mask)) {
+		*apicid = (unsigned int)cpu_mask;
+		return 0;
+	} else {
+		return -EINVAL;
+	}
+}
+
+extern int
+default_cpu_mask_to_apicid_and(const struct cpumask *cpumask,
+			       const struct cpumask *andmask,
+			       unsigned int *apicid);
 
 static inline void
 flat_vector_allocation_domain(int cpu, struct cpumask *retmask,
@@ -614,20 +626,13 @@ extern int default_check_phys_apicid_present(int phys_apicid);
 #endif
 
 #endif /* CONFIG_X86_LOCAL_APIC */
-
-#ifdef CONFIG_SMP
-bool apic_id_is_primary_thread(unsigned int id);
-#else
-static inline bool apic_id_is_primary_thread(unsigned int id) { return false; }
-#endif
-
 extern void irq_enter(void);
 extern void irq_exit(void);
 
 static inline void entering_irq(void)
 {
 	irq_enter();
-	kvm_set_cpu_l1tf_flush_l1d();
+	exit_idle();
 }
 
 static inline void entering_ack_irq(void)
@@ -638,9 +643,8 @@ static inline void entering_ack_irq(void)
 
 static inline void ipi_entering_ack_irq(void)
 {
-	irq_enter();
 	ack_APIC_irq();
-	kvm_set_cpu_l1tf_flush_l1d();
+	irq_enter();
 }
 
 static inline void exiting_irq(void)
@@ -650,8 +654,9 @@ static inline void exiting_irq(void)
 
 static inline void exiting_ack_irq(void)
 {
-	ack_APIC_irq();
 	irq_exit();
+	/* Ack only at the end to avoid potential reentry */
+	ack_APIC_irq();
 }
 
 extern void ioapic_zap_locks(void);

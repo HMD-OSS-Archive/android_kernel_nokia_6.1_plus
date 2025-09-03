@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 #include <linux/slab.h>
 #include <linux/file.h>
 #include <linux/fdtable.h>
@@ -17,9 +16,6 @@
 #include <linux/personality.h>
 #include <linux/binfmts.h>
 #include <linux/coredump.h>
-#include <linux/sched/coredump.h>
-#include <linux/sched/signal.h>
-#include <linux/sched/task_stack.h>
 #include <linux/utsname.h>
 #include <linux/pid_namespace.h>
 #include <linux/module.h>
@@ -37,11 +33,11 @@
 #include <linux/pipe_fs_i.h>
 #include <linux/oom.h>
 #include <linux/compat.h>
+#include <linux/sched.h>
 #include <linux/fs.h>
 #include <linux/path.h>
-#include <linux/timekeeping.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/mmu_context.h>
 #include <asm/tlb.h>
 #include <asm/exec.h>
@@ -125,26 +121,6 @@ int cn_esc_printf(struct core_name *cn, const char *fmt, ...)
 	ret = cn_vprintf(cn, fmt, arg);
 	va_end(arg);
 
-	if (ret == 0) {
-		/*
-		 * Ensure that this coredump name component can't cause the
-		 * resulting corefile path to consist of a ".." or ".".
-		 */
-		if ((cn->used - cur == 1 && cn->corename[cur] == '.') ||
-				(cn->used - cur == 2 && cn->corename[cur] == '.'
-				&& cn->corename[cur+1] == '.'))
-			cn->corename[cur] = '!';
-
-		/*
-		 * Empty names are fishy and could be used to create a "//" in a
-		 * corefile name, causing the coredump to happen one directory
-		 * level too high. Enforce that all components of the core
-		 * pattern are at least one character long.
-		 */
-		if (cn->used == cur)
-			ret = cn_printf(cn, "!");
-	}
-
 	for (; cur < cn->used; ++cur) {
 		if (cn->corename[cur] == '/')
 			cn->corename[cur] = '!';
@@ -162,7 +138,7 @@ static int cn_print_exe_file(struct core_name *cn)
 	if (!exe_file)
 		return cn_esc_printf(cn, "%s (path unknown)", current->comm);
 
-	pathbuf = kmalloc(PATH_MAX, GFP_KERNEL);
+	pathbuf = kmalloc(PATH_MAX, GFP_TEMPORARY);
 	if (!pathbuf) {
 		ret = -ENOMEM;
 		goto put_exe_file;
@@ -260,10 +236,9 @@ static int format_corename(struct core_name *cn, struct coredump_params *cprm)
 				break;
 			/* UNIX time of coredump */
 			case 't': {
-				time64_t time;
-
-				time = ktime_get_real_seconds();
-				err = cn_printf(cn, "%lld", time);
+				struct timeval tv;
+				do_gettimeofday(&tv);
+				err = cn_printf(cn, "%lu", tv.tv_sec);
 				break;
 			}
 			/* hostname */
@@ -417,9 +392,7 @@ static int coredump_wait(int exit_code, struct core_state *core_state)
 	core_state->dumper.task = tsk;
 	core_state->dumper.next = NULL;
 
-	if (down_write_killable(&mm->mmap_sem))
-		return -EINTR;
-
+	down_write(&mm->mmap_sem);
 	if (!mm->core_state)
 		core_waiters = zap_threads(tsk, mm, core_state, exit_code);
 	up_write(&mm->mmap_sem);
@@ -481,19 +454,7 @@ static bool dump_interrupted(void)
 	 * but then we need to teach dump_write() to restart and clear
 	 * TIF_SIGPENDING.
 	 */
-#ifdef CONFIG_MTK_AEE_FEATURE
-	/* avoid coredump truncated */
-	int ret = signal_pending(current);
-
-	if (ret) {
-		pr_info("%s: clear sig pending flag\n", __func__);
-		clear_thread_flag(TIF_SIGPENDING);
-		ret = signal_pending(current);
-	}
-	return ret;
-#else
 	return signal_pending(current);
-#endif
 }
 
 static void wait_for_dump_helpers(struct file *file)
@@ -548,53 +509,6 @@ static int umh_pipe_setup(struct subprocess_info *info, struct cred *new)
 	return err;
 }
 
-#if defined(CONFIG_MTK_AEE_FEATURE) && defined(CONFIG_MTK_ENG_BUILD)
-#include <linux/suspend.h>
-
-static atomic_t coredump_request_count = ATOMIC_INIT(0);
-
-static int coredump_pm_notifier_cb(struct notifier_block *nb,
-	unsigned long event, void *ptr)
-{
-	switch (event) {
-	case PM_SUSPEND_PREPARE:
-		if (atomic_read(&coredump_request_count) > 0) {
-			pr_info("%s coredump is on going", __func__);
-			return NOTIFY_BAD;
-		} else
-			return NOTIFY_DONE;
-	default:
-		return NOTIFY_DONE;
-	}
-	return NOTIFY_DONE;
-}
-
-/* Hibernation and suspend events */
-static struct notifier_block coredump_pm_notifier_block = {
-	.notifier_call = coredump_pm_notifier_cb,
-};
-
-static int __init init_coredump(void)
-{
-	/* register pm notifier */
-	int ret = register_pm_notifier(&coredump_pm_notifier_block);
-
-	if (ret)
-		pr_info("%s: failed to register_pm_notifier(%d)\n",
-				__func__, ret);
-	return 0;
-}
-
-static void __exit exit_coredump(void)
-{
-	/* unregister pm notifier */
-	unregister_pm_notifier(&coredump_pm_notifier_block);
-}
-
-late_initcall(init_coredump);
-module_exit(exit_coredump);
-#endif
-
 void do_coredump(const siginfo_t *siginfo)
 {
 	struct core_state core_state;
@@ -621,12 +535,6 @@ void do_coredump(const siginfo_t *siginfo)
 		 */
 		.mm_flags = mm->flags,
 	};
-
-#if defined(CONFIG_MTK_AEE_FEATURE) && defined(CONFIG_MTK_ENG_BUILD)
-	siginfo_t tmp_si;
-
-	atomic_inc(&coredump_request_count);
-#endif
 
 	audit_core_dumps(siginfo->si_signo);
 
@@ -708,13 +616,6 @@ void do_coredump(const siginfo_t *siginfo)
 			       __func__);
 			goto fail_dropcount;
 		}
-
-	#if defined(CONFIG_MTK_AEE_FEATURE) && defined(CONFIG_MTK_ENG_BUILD)
-		if (likely(current->last_siginfo == NULL)) {
-			tmp_si = *siginfo;
-			current->last_siginfo = &tmp_si;
-		}
-	#endif
 
 		retval = -ENOMEM;
 		sub_info = call_usermodehelper_setup(helper_argv[0],
@@ -849,9 +750,6 @@ fail_unlock:
 fail_creds:
 	put_cred(cred);
 fail:
-#if defined(CONFIG_MTK_AEE_FEATURE) && defined(CONFIG_MTK_ENG_BUILD)
-	atomic_dec(&coredump_request_count);
-#endif
 	return;
 }
 
@@ -868,36 +766,13 @@ int dump_emit(struct coredump_params *cprm, const void *addr, int nr)
 	if (cprm->written + nr > cprm->limit)
 		return 0;
 	while (nr) {
-		if (dump_interrupted()) {
-			pr_info("%s: interrupted\n", __func__);
+		if (dump_interrupted())
 			return 0;
-		}
 		n = __kernel_write(file, addr, nr, &pos);
-		if (n <= 0) {
-			pr_info("%s: __kernel_write fail: %zd\n", __func__, n);
-#ifdef CONFIG_MTK_AEE_FEATURE
-			/* retry for avoid coredump truncated */
-			if (n == -ERESTARTSYS) {
-				if (signal_pending(current)) {
-					pr_info("%s: clear sig pending flag\n",
-						__func__);
-					clear_thread_flag(TIF_SIGPENDING);
-				}
-				n = __kernel_write(file, addr, nr, &pos);
-				if (n <= 0) {
-					pr_info("%s: retry fail: %zd\n",
-						__func__, n);
-					return 0;
-				}
-			} else
-				return 0;
-#else
+		if (n <= 0)
 			return 0;
-#endif
-		}
 		file->f_pos = pos;
 		cprm->written += n;
-		cprm->pos += n;
 		nr -= n;
 	}
 	return 1;
@@ -909,10 +784,12 @@ int dump_skip(struct coredump_params *cprm, size_t nr)
 	static char zeroes[PAGE_SIZE];
 	struct file *file = cprm->file;
 	if (file->f_op->llseek && file->f_op->llseek != no_llseek) {
+		if (cprm->written + nr > cprm->limit)
+			return 0;
 		if (dump_interrupted() ||
 		    file->f_op->llseek(file, nr, SEEK_CUR) < 0)
 			return 0;
-		cprm->pos += nr;
+		cprm->written += nr;
 		return 1;
 	} else {
 		while (nr > PAGE_SIZE) {
@@ -927,7 +804,7 @@ EXPORT_SYMBOL(dump_skip);
 
 int dump_align(struct coredump_params *cprm, int align)
 {
-	unsigned mod = cprm->pos & (align - 1);
+	unsigned mod = cprm->written & (align - 1);
 	if (align & (align - 1))
 		return 0;
 	return mod ? dump_skip(cprm, align - mod) : 1;

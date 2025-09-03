@@ -1,5 +1,5 @@
 /*
- *  linux/drivers/devfreq/governor_userspace.c
+ *  linux/drivers/devfreq/governor_simpleondemand.c
  *
  *  Copyright (C) 2011 Samsung Electronics
  *	MyungJoo Ham <myungjoo.ham@samsung.com>
@@ -22,7 +22,8 @@ struct userspace_data {
 	bool valid;
 };
 
-static int devfreq_userspace_func(struct devfreq *df, unsigned long *freq)
+static int devfreq_userspace_func(struct devfreq *df, unsigned long *freq,
+					u32 *flag)
 {
 	struct userspace_data *data = df->data;
 
@@ -49,6 +50,7 @@ static ssize_t store_freq(struct device *dev, struct device_attribute *attr,
 	struct userspace_data *data;
 	unsigned long wanted;
 	int err = 0;
+
 
 	mutex_lock(&devfreq->lock);
 	data = devfreq->data;
@@ -86,7 +88,7 @@ static struct attribute *dev_entries[] = {
 	&dev_attr_set_freq.attr,
 	NULL,
 };
-static const struct attribute_group dev_attr_group = {
+static struct attribute_group dev_attr_group = {
 	.name	= "userspace",
 	.attrs	= dev_entries,
 };
@@ -111,13 +113,7 @@ out:
 
 static void userspace_exit(struct devfreq *devfreq)
 {
-	/*
-	 * Remove the sysfs entry, unless this is being called after
-	 * device_del(), which should have done this already via kobject_del().
-	 */
-	if (devfreq->dev.kobj.sd)
-		sysfs_remove_group(&devfreq->dev.kobj, &dev_attr_group);
-
+	sysfs_remove_group(&devfreq->dev.kobj, &dev_attr_group);
 	kfree(devfreq->data);
 	devfreq->data = NULL;
 }

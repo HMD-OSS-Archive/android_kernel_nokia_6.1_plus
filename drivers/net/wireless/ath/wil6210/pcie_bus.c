@@ -84,9 +84,7 @@ void wil_set_capabilities(struct wil6210_priv *wil)
 
 	/* extract FW capabilities from file without loading the FW */
 	wil_request_firmware(wil, wil->wil_fw_name, false);
-
-	if (test_bit(WMI_FW_CAPABILITY_RSSI_REPORTING, wil->fw_capabilities))
-		wil_to_wiphy(wil)->signal_type = CFG80211_SIGNAL_TYPE_MBM;
+	wil_refresh_fw_capabilities(wil);
 }
 
 void wil_disable_irq(struct wil6210_priv *wil)
@@ -192,13 +190,6 @@ static int wil_platform_rop_fw_recovery(void *wil_handle)
 	return 0;
 }
 
-static void wil_platform_ops_uninit(struct wil6210_priv *wil)
-{
-	if (wil->platform_ops.uninit)
-		wil->platform_ops.uninit(wil->platform_handle);
-	memset(&wil->platform_ops, 0, sizeof(wil->platform_ops));
-}
-
 static int wil_pcie_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	struct wil6210_priv *wil;
@@ -296,15 +287,6 @@ static int wil_pcie_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	wil_set_capabilities(wil);
 	wil6210_clear_irq(wil);
 
-	wil->keep_radio_on_during_sleep =
-		wil->platform_ops.keep_radio_on_during_sleep &&
-		wil->platform_ops.keep_radio_on_during_sleep(
-			wil->platform_handle) &&
-		test_bit(WMI_FW_CAPABILITY_D3_SUSPEND, wil->fw_capabilities);
-
-	wil_info(wil, "keep_radio_on_during_sleep (%d)\n",
-		 wil->keep_radio_on_during_sleep);
-
 	/* FW should raise IRQ when ready */
 	rc = wil_if_pcie_enable(wil);
 	if (rc) {
@@ -332,7 +314,7 @@ static int wil_pcie_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 #endif /* CONFIG_PM */
 
 	wil6210_debugfs_init(wil);
-
+	wil6210_sysfs_init(wil);
 
 	return 0;
 
@@ -345,7 +327,8 @@ err_release_reg:
 err_disable_pdev:
 	pci_disable_device(pdev);
 err_plat:
-	wil_platform_ops_uninit(wil);
+	if (wil->platform_ops.uninit)
+		wil->platform_ops.uninit(wil->platform_handle);
 if_free:
 	wil_if_free(wil);
 
@@ -365,6 +348,7 @@ static void wil_pcie_remove(struct pci_dev *pdev)
 #endif /* CONFIG_PM_SLEEP */
 #endif /* CONFIG_PM */
 
+	wil6210_sysfs_remove(wil);
 	wil6210_debugfs_remove(wil);
 	rtnl_lock();
 	wil_p2p_wdev_free(wil);
@@ -374,7 +358,8 @@ static void wil_pcie_remove(struct pci_dev *pdev)
 	pci_iounmap(pdev, csr);
 	pci_release_region(pdev, 0);
 	pci_disable_device(pdev);
-	wil_platform_ops_uninit(wil);
+	if (wil->platform_ops.uninit)
+		wil->platform_ops.uninit(wil->platform_handle);
 	wil_if_free(wil);
 }
 

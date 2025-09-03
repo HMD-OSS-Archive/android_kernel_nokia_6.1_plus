@@ -43,12 +43,12 @@ static long native_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 struct v4l2_clip32 {
 	struct v4l2_rect        c;
-	compat_caddr_t 		next;
+	compat_caddr_t		next;
 };
 
 struct v4l2_window32 {
 	struct v4l2_rect        w;
-	__u32		  	field;	/* enum v4l2_field */
+	__u32			field;	/* enum v4l2_field */
 	__u32			chromakey;
 	compat_caddr_t		clips; /* actually struct v4l2_clip32 * */
 	__u32			clipcount;
@@ -139,7 +139,6 @@ struct v4l2_format32 {
 		struct v4l2_vbi_format	vbi;
 		struct v4l2_sliced_vbi_format	sliced;
 		struct v4l2_sdr_format	sdr;
-		struct v4l2_meta_format	meta;
 		__u8	raw_data[200];        /* user-defined */
 	} fmt;
 };
@@ -227,9 +226,6 @@ static int __get_v4l2_format32(struct v4l2_format __user *kp,
 	case V4L2_BUF_TYPE_SDR_OUTPUT:
 		return copy_in_user(&kp->fmt.sdr, &up->fmt.sdr,
 				    sizeof(kp->fmt.sdr)) ? -EFAULT : 0;
-	case V4L2_BUF_TYPE_META_CAPTURE:
-		return copy_in_user(&kp->fmt.meta, &up->fmt.meta,
-				    sizeof(kp->fmt.meta)) ? -EFAULT : 0;
 	default:
 		return -EINVAL;
 	}
@@ -296,9 +292,6 @@ static int __put_v4l2_format32(struct v4l2_format __user *kp,
 	case V4L2_BUF_TYPE_SDR_OUTPUT:
 		return copy_in_user(&up->fmt.sdr, &kp->fmt.sdr,
 				    sizeof(kp->fmt.sdr)) ? -EFAULT : 0;
-	case V4L2_BUF_TYPE_META_CAPTURE:
-		return copy_in_user(&up->fmt.meta, &kp->fmt.meta,
-				    sizeof(kp->fmt.meta)) ? -EFAULT : 0;
 	default:
 		return -EINVAL;
 	}
@@ -400,7 +393,11 @@ static int get_v4l2_plane32(struct v4l2_plane __user *up,
 
 	if (copy_in_user(up, up32, 2 * sizeof(__u32)) ||
 	    copy_in_user(&up->data_offset, &up32->data_offset,
-			 sizeof(up->data_offset)))
+			 sizeof(up->data_offset)) ||
+	    copy_in_user(up->reserved, up32->reserved,
+			 sizeof(up->reserved)) ||
+	    copy_in_user(&up->length, &up32->length,
+			 sizeof(up->length)))
 		return -EFAULT;
 
 	switch (memory) {
@@ -431,6 +428,8 @@ static int put_v4l2_plane32(struct v4l2_plane __user *up,
 	unsigned long p;
 
 	if (copy_in_user(up32, up, 2 * sizeof(__u32)) ||
+	    copy_in_user(up32->reserved, up->reserved,
+			 sizeof(up32->reserved)) ||
 	    copy_in_user(&up32->data_offset, &up->data_offset,
 			 sizeof(up->data_offset)))
 		return -EFAULT;
@@ -655,7 +654,7 @@ static int put_v4l2_buffer32(struct v4l2_buffer __user *kp,
 struct v4l2_framebuffer32 {
 	__u32			capability;
 	__u32			flags;
-	compat_caddr_t 		base;
+	compat_caddr_t		base;
 	struct {
 		__u32		width;
 		__u32		height;
@@ -731,7 +730,7 @@ static inline int put_v4l2_input32(struct v4l2_input __user *kp,
 }
 
 struct v4l2_ext_controls32 {
-	__u32 which;
+	__u32 ctrl_class;
 	__u32 count;
 	__u32 error_idx;
 	__u32 reserved[2];
@@ -805,7 +804,7 @@ static int get_v4l2_ext_controls32(struct file *file,
 	compat_caddr_t p;
 
 	if (!access_ok(VERIFY_READ, up, sizeof(*up)) ||
-	    assign_in_user(&kp->which, &up->which) ||
+	    assign_in_user(&kp->ctrl_class, &up->ctrl_class) ||
 	    get_user(count, &up->count) ||
 	    put_user(count, &kp->count) ||
 	    assign_in_user(&kp->error_idx, &up->error_idx) ||
@@ -863,7 +862,7 @@ static int put_v4l2_ext_controls32(struct file *file,
 	compat_caddr_t p;
 
 	if (!access_ok(VERIFY_WRITE, up, sizeof(*up)) ||
-	    assign_in_user(&up->which, &kp->which) ||
+	    assign_in_user(&up->ctrl_class, &kp->ctrl_class) ||
 	    get_user(count, &kp->count) ||
 	    put_user(count, &up->count) ||
 	    assign_in_user(&up->error_idx, &kp->error_idx) ||
@@ -910,8 +909,13 @@ static int put_v4l2_ext_controls32(struct file *file,
 struct v4l2_event32 {
 	__u32				type;
 	union {
-		compat_s64		value64;
-		__u8			data[64];
+		struct v4l2_event_vsync		vsync;
+		struct v4l2_event_ctrl		ctrl;
+		struct v4l2_event_frame_sync	frame_sync;
+		struct v4l2_event_src_change	src_change;
+		struct v4l2_event_motion_det	motion_det;
+		 compat_s64                     value64;
+		__u8			        data[64];
 	} u;
 	__u32				pending;
 	__u32				sequence;
@@ -988,7 +992,7 @@ static int put_v4l2_edid32(struct v4l2_edid __user *kp,
 #define VIDIOC_ENUMINPUT32	_IOWR('V', 26, struct v4l2_input32)
 #define VIDIOC_G_EDID32		_IOWR('V', 40, struct v4l2_edid32)
 #define VIDIOC_S_EDID32		_IOWR('V', 41, struct v4l2_edid32)
-#define VIDIOC_TRY_FMT32      	_IOWR('V', 64, struct v4l2_format32)
+#define VIDIOC_TRY_FMT32	_IOWR('V', 64, struct v4l2_format32)
 #define VIDIOC_G_EXT_CTRLS32    _IOWR('V', 71, struct v4l2_ext_controls32)
 #define VIDIOC_S_EXT_CTRLS32    _IOWR('V', 72, struct v4l2_ext_controls32)
 #define VIDIOC_TRY_EXT_CTRLS32  _IOWR('V', 73, struct v4l2_ext_controls32)

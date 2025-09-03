@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 #include <linux/kernel.h>
 #include <linux/string.h>
 #include <linux/mm.h>
@@ -6,15 +5,21 @@
 #include <linux/page_ext.h>
 #include <linux/poison.h>
 #include <linux/ratelimit.h>
-#include <linux/kasan.h>
 
-static bool want_page_poisoning __read_mostly;
+static bool want_page_poisoning __read_mostly
+		= IS_ENABLED(CONFIG_PAGE_POISONING_ENABLE_DEFAULT);
 
 static int early_page_poison_param(char *buf)
 {
 	if (!buf)
 		return -EINVAL;
-	return strtobool(buf, &want_page_poisoning);
+
+	if (strcmp(buf, "on") == 0)
+		want_page_poisoning = true;
+	else if (strcmp(buf, "off") == 0)
+		want_page_poisoning = false;
+
+	return 0;
 }
 early_param("page_poison", early_page_poison_param);
 
@@ -35,10 +40,7 @@ static void poison_page(struct page *page)
 {
 	void *addr = kmap_atomic(page);
 
-	/* KASAN still think the page is in-use, so skip it. */
-	kasan_disable_current();
 	memset(addr, PAGE_POISON, PAGE_SIZE);
-	kasan_enable_current();
 	kunmap_atomic(addr);
 }
 
@@ -57,7 +59,8 @@ static bool single_bit_flip(unsigned char a, unsigned char b)
 	return error && !(error & (error - 1));
 }
 
-static void check_poison_mem(unsigned char *mem, size_t bytes)
+static void check_poison_mem(struct page *page,
+			     unsigned char *mem, size_t bytes)
 {
 	static DEFINE_RATELIMIT_STATE(ratelimit, 5 * HZ, 10);
 	unsigned char *start;
@@ -78,12 +81,15 @@ static void check_poison_mem(unsigned char *mem, size_t bytes)
 	if (!__ratelimit(&ratelimit))
 		return;
 	else if (start == end && single_bit_flip(*start, PAGE_POISON))
-		pr_err("pagealloc: single bit error\n");
+		pr_err("pagealloc: single bit error on page with phys start 0x%lx\n",
+			(unsigned long)page_to_phys(page));
 	else
-		pr_err("pagealloc: memory corruption\n");
+		pr_err("pagealloc: memory corruption on page with phys start 0x%lx\n",
+			(unsigned long)page_to_phys(page));
 
 	print_hex_dump(KERN_ERR, "", DUMP_PREFIX_ADDRESS, 16, 1, start,
 			end - start + 1, 1);
+	BUG_ON(PANIC_CORRUPTION);
 	dump_stack();
 }
 
@@ -97,7 +103,7 @@ static void unpoison_page(struct page *page)
 	 * that is freed to buddy. Thus no extra check is done to
 	 * see if a page was posioned.
 	 */
-	check_poison_mem(addr, PAGE_SIZE);
+	check_poison_mem(page, addr, PAGE_SIZE);
 	kunmap_atomic(addr);
 }
 

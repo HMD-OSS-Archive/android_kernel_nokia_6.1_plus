@@ -27,14 +27,17 @@ static int snd_pcm_ioctl_delay_compat(struct snd_pcm_substream *substream,
 				      s32 __user *src)
 {
 	snd_pcm_sframes_t delay;
+	mm_segment_t fs;
 	int err;
 
+	fs = snd_enter_user();
 	err = snd_pcm_delay(substream, &delay);
-	if (err)
+	snd_leave_user(fs);
+	if (err < 0)
 		return err;
 	if (put_user(delay, src))
 		return -EFAULT;
-	return 0;
+	return err;
 }
 
 static int snd_pcm_ioctl_rewind_compat(struct snd_pcm_substream *substream,
@@ -550,7 +553,6 @@ struct snd_pcm_mmap_status_x32 {
 	u32 pad2; /* alignment */
 	struct timespec tstamp;
 	s32 suspended_state;
-	s32 pad3;
 	struct timespec audio_tstamp;
 } __packed;
 
@@ -655,6 +657,39 @@ enum {
 #endif /* CONFIG_X86_X32 */
 };
 
+static int snd_compressed_ioctl32(struct snd_pcm_substream *substream,
+				 unsigned int cmd, void __user *arg)
+{
+	struct snd_pcm_runtime *runtime;
+	int err = 0;
+
+	if (PCM_RUNTIME_CHECK(substream))
+		return -ENXIO;
+	runtime = substream->runtime;
+	if (substream->ops->compat_ioctl) {
+		err = substream->ops->compat_ioctl(substream, cmd, arg);
+	} else {
+		err = -ENOIOCTLCMD;
+		pr_err("%s failed cmd = %d\n", __func__, cmd);
+	}
+	pr_debug("%s called with cmd = %d\n", __func__, cmd);
+	return err;
+}
+static int snd_user_ioctl32(struct snd_pcm_substream *substream,
+			  unsigned int cmd, void __user *arg)
+{
+	struct snd_pcm_runtime *runtime;
+	int err = -ENOIOCTLCMD;
+
+	if (PCM_RUNTIME_CHECK(substream))
+		return -ENXIO;
+	runtime = substream->runtime;
+	if (substream->ops->compat_ioctl)
+		err = substream->ops->compat_ioctl(substream, cmd, arg);
+	return err;
+}
+
+
 static long snd_pcm_ioctl_compat(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct snd_pcm_file *pcm_file;
@@ -680,7 +715,6 @@ static long snd_pcm_ioctl_compat(struct file *file, unsigned int cmd, unsigned l
 	case SNDRV_PCM_IOCTL_INFO:
 	case SNDRV_PCM_IOCTL_TSTAMP:
 	case SNDRV_PCM_IOCTL_TTSTAMP:
-	case SNDRV_PCM_IOCTL_USER_PVERSION:
 	case SNDRV_PCM_IOCTL_HWSYNC:
 	case SNDRV_PCM_IOCTL_PREPARE:
 	case SNDRV_PCM_IOCTL_RESET:
@@ -693,7 +727,10 @@ static long snd_pcm_ioctl_compat(struct file *file, unsigned int cmd, unsigned l
 	case SNDRV_PCM_IOCTL_XRUN:
 	case SNDRV_PCM_IOCTL_LINK:
 	case SNDRV_PCM_IOCTL_UNLINK:
-		return snd_pcm_common_ioctl(file, substream, cmd, argp);
+		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
+			return snd_pcm_playback_ioctl1(file, substream, cmd, argp);
+		else
+			return snd_pcm_capture_ioctl1(file, substream, cmd, argp);
 	case SNDRV_PCM_IOCTL_HW_REFINE32:
 		return snd_pcm_ioctl_hw_params_compat(substream, 1, argp);
 	case SNDRV_PCM_IOCTL_HW_PARAMS32:
@@ -732,6 +769,11 @@ static long snd_pcm_ioctl_compat(struct file *file, unsigned int cmd, unsigned l
 	case SNDRV_PCM_IOCTL_CHANNEL_INFO_X32:
 		return snd_pcm_ioctl_channel_info_x32(substream, argp);
 #endif /* CONFIG_X86_X32 */
+	default:
+		if (_IOC_TYPE(cmd) == 'C')
+			return snd_compressed_ioctl32(substream, cmd, argp);
+		else if (_IOC_TYPE(cmd) == 'U')
+			return snd_user_ioctl32(substream, cmd, argp);
 	}
 
 	return -ENOIOCTLCMD;

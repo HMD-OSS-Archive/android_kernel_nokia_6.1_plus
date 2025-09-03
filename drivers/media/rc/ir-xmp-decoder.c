@@ -43,6 +43,9 @@ static int ir_xmp_decode(struct rc_dev *dev, struct ir_raw_event ev)
 {
 	struct xmp_dec *data = &dev->raw->xmp;
 
+	if (!(dev->enabled_protocols & RC_BIT_XMP))
+		return 0;
+
 	if (!is_timing_event(ev)) {
 		if (ev.reset)
 			data->state = STATE_INACTIVE;
@@ -141,7 +144,7 @@ static int ir_xmp_decode(struct rc_dev *dev, struct ir_raw_event ev)
 			IR_dprintk(1, "XMP scancode 0x%06x\n", scancode);
 
 			if (toggle == 0) {
-				rc_keydown(dev, RC_PROTO_XMP, scancode, 0);
+				rc_keydown(dev, RC_TYPE_XMP, scancode, 0);
 			} else {
 				rc_repeat(dev);
 				IR_dprintk(1, "Repeat last key\n");
@@ -196,7 +199,7 @@ static int ir_xmp_decode(struct rc_dev *dev, struct ir_raw_event ev)
 }
 
 static struct ir_raw_handler xmp_handler = {
-	.protocols	= RC_PROTO_BIT_XMP,
+	.protocols	= RC_BIT_XMP,
 	.decode		= ir_xmp_decode,
 };
 

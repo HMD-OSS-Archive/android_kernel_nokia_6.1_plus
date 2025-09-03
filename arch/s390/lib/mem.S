@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * String handling functions.
  *
@@ -6,48 +5,9 @@
  */
 
 #include <linux/linkage.h>
-#include <asm/export.h>
 #include <asm/nospec-insn.h>
 
 	GEN_BR_THUNK %r14
-
-/*
- * void *memmove(void *dest, const void *src, size_t n)
- */
-ENTRY(memmove)
-	ltgr	%r4,%r4
-	lgr	%r1,%r2
-	jz	.Lmemmove_exit
-	aghi	%r4,-1
-	clgr	%r2,%r3
-	jnh	.Lmemmove_forward
-	la	%r5,1(%r4,%r3)
-	clgr	%r2,%r5
-	jl	.Lmemmove_reverse
-.Lmemmove_forward:
-	srlg	%r0,%r4,8
-	ltgr	%r0,%r0
-	jz	.Lmemmove_forward_remainder
-.Lmemmove_forward_loop:
-	mvc	0(256,%r1),0(%r3)
-	la	%r1,256(%r1)
-	la	%r3,256(%r3)
-	brctg	%r0,.Lmemmove_forward_loop
-.Lmemmove_forward_remainder:
-	larl	%r5,.Lmemmove_mvc
-	ex	%r4,0(%r5)
-.Lmemmove_exit:
-	BR_EX	%r14
-.Lmemmove_reverse:
-	ic	%r0,0(%r4,%r3)
-	stc	%r0,0(%r4,%r1)
-	brctg	%r4,.Lmemmove_reverse
-	ic	%r0,0(%r4,%r3)
-	stc	%r0,0(%r4,%r1)
-	BR_EX	%r14
-.Lmemmove_mvc:
-	mvc	0(1,%r1),0(%r3)
-EXPORT_SYMBOL(memmove)
 
 /*
  * memset implementation
@@ -73,12 +33,12 @@ ENTRY(memset)
 	srlg	%r3,%r4,8
 	ltgr	%r3,%r3
 	lgr	%r1,%r2
-	jz	.Lmemset_clear_remainder
+	jz	.Lmemset_clear_rest
 .Lmemset_clear_loop:
 	xc	0(256,%r1),0(%r1)
 	la	%r1,256(%r1)
 	brctg	%r3,.Lmemset_clear_loop
-.Lmemset_clear_remainder:
+.Lmemset_clear_rest:
 	larl	%r3,.Lmemset_xc
 	ex	%r4,0(%r3)
 .Lmemset_exit:
@@ -91,12 +51,12 @@ ENTRY(memset)
 	aghi	%r4,-2
 	srlg	%r3,%r4,8
 	ltgr	%r3,%r3
-	jz	.Lmemset_fill_remainder
+	jz	.Lmemset_fill_rest
 .Lmemset_fill_loop:
 	mvc	1(256,%r1),0(%r1)
 	la	%r1,256(%r1)
 	brctg	%r3,.Lmemset_fill_loop
-.Lmemset_fill_remainder:
+.Lmemset_fill_rest:
 	larl	%r3,.Lmemset_mvc
 	ex	%r4,0(%r3)
 .Lmemset_fill_exit:
@@ -105,7 +65,6 @@ ENTRY(memset)
 	xc	0(1,%r1),0(%r1)
 .Lmemset_mvc:
 	mvc	1(1,%r1),0(%r1)
-EXPORT_SYMBOL(memset)
 
 /*
  * memcpy implementation
@@ -120,7 +79,7 @@ ENTRY(memcpy)
 	ltgr	%r5,%r5
 	lgr	%r1,%r2
 	jnz	.Lmemcpy_loop
-.Lmemcpy_remainder:
+.Lmemcpy_rest:
 	larl	%r5,.Lmemcpy_mvc
 	ex	%r4,0(%r5)
 .Lmemcpy_exit:
@@ -130,7 +89,6 @@ ENTRY(memcpy)
 	la	%r1,256(%r1)
 	la	%r3,256(%r3)
 	brctg	%r5,.Lmemcpy_loop
-	j	.Lmemcpy_remainder
+	j	.Lmemcpy_rest
 .Lmemcpy_mvc:
 	mvc	0(1,%r1),0(%r3)
-EXPORT_SYMBOL(memcpy)
