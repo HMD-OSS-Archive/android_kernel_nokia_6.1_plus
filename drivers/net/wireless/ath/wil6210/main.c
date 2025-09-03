@@ -190,7 +190,6 @@ __acquires(&sta->tid_rx_lock) __releases(&sta->tid_rx_lock)
 			break;
 		}
 		sta->status = wil_sta_unused;
-		sta->fst_link_loss = false;
 	}
 	/* reorder buffers */
 	for (i = 0; i < WIL_STA_TID_NUM; i++) {
@@ -559,8 +558,6 @@ int wil_priv_init(struct wil6210_priv *wil)
 	wil->net_queue_stopped = 1;
 	init_waitqueue_head(&wil->wq);
 
-	wil_ftm_init(wil);
-
 	wil->wmi_wq = create_singlethread_workqueue(WIL_NAME "_wmi");
 	if (!wil->wmi_wq)
 		return -EAGAIN;
@@ -625,7 +622,6 @@ void wil_priv_deinit(struct wil6210_priv *wil)
 {
 	wil_dbg_misc(wil, "priv_deinit\n");
 
-	wil_ftm_deinit(wil);
 	wil_set_recovery_state(wil, fw_recovery_idle);
 	del_timer_sync(&wil->scan_timer);
 	del_timer_sync(&wil->p2p.discovery_timer);
@@ -765,32 +761,11 @@ static void wil_collect_fw_info(struct wil6210_priv *wil)
 	u8 retry_short;
 	int rc;
 
-	wil_refresh_fw_capabilities(wil);
-
 	rc = wmi_get_mgmt_retry(wil, &retry_short);
 	if (!rc) {
 		wiphy->retry_short = retry_short;
 		wil_dbg_misc(wil, "FW retry_short: %d\n", retry_short);
 	}
-}
-
-void wil_refresh_fw_capabilities(struct wil6210_priv *wil)
-{
-	struct wiphy *wiphy = wil_to_wiphy(wil);
-
-	wil->keep_radio_on_during_sleep =
-		wil->platform_ops.keep_radio_on_during_sleep &&
-		wil->platform_ops.keep_radio_on_during_sleep(
-			wil->platform_handle) &&
-		test_bit(WMI_FW_CAPABILITY_D3_SUSPEND, wil->fw_capabilities);
-
-	wil_info(wil, "keep_radio_on_during_sleep (%d)\n",
-		 wil->keep_radio_on_during_sleep);
-
-	if (test_bit(WMI_FW_CAPABILITY_RSSI_REPORTING, wil->fw_capabilities))
-		wiphy->signal_type = CFG80211_SIGNAL_TYPE_MBM;
-	else
-		wiphy->signal_type = CFG80211_SIGNAL_TYPE_UNSPEC;
 }
 
 void wil_mbox_ring_le2cpus(struct wil6210_mbox_ring *r)
@@ -912,6 +887,9 @@ static int wil_wait_for_fw_ready(struct wil6210_priv *wil)
 void wil_abort_scan(struct wil6210_priv *wil, bool sync)
 {
 	int rc;
+	struct cfg80211_scan_info info = {
+		.aborted = true,
+	};
 
 	lockdep_assert_held(&wil->p2p_wdev_mutex);
 
@@ -929,7 +907,7 @@ void wil_abort_scan(struct wil6210_priv *wil, bool sync)
 
 	mutex_lock(&wil->p2p_wdev_mutex);
 	if (wil->scan_request) {
-		cfg80211_scan_done(wil->scan_request, true);
+		cfg80211_scan_done(wil->scan_request, &info);
 		wil->scan_request = NULL;
 	}
 }
@@ -1002,10 +980,6 @@ int wil_reset(struct wil6210_priv *wil, bool load_fw)
 
 	if (wil->hw_version == HW_VER_UNKNOWN)
 		return -ENODEV;
-
-	wil_dbg_misc(wil, "Prevent DS in BL & mark FW to set T_POWER_ON=0\n");
-	wil_s(wil, RGF_USER_USAGE_8, BIT_USER_PREVENT_DEEP_SLEEP |
-	      BIT_USER_SUPPORT_T_POWER_ON_0);
 
 	if (wil->platform_ops.notify) {
 		rc = wil->platform_ops.notify(wil->platform_handle,
@@ -1098,17 +1072,10 @@ int wil_reset(struct wil6210_priv *wil, bool load_fw)
 			return rc;
 		}
 
-		wil_collect_fw_info(wil);
-
 		if (wil->ps_profile != WMI_PS_PROFILE_TYPE_DEFAULT)
 			wil_ps_update(wil, wil->ps_profile);
 
-		if (wil->tt_data_set)
-			wmi_set_tt_cfg(wil, &wil->tt_data);
-
-		if (wil->snr_thresh.enabled)
-			wmi_set_snr_thresh(wil, wil->snr_thresh.omni,
-					   wil->snr_thresh.direct);
+		wil_collect_fw_info(wil);
 
 		if (wil->platform_ops.notify) {
 			rc = wil->platform_ops.notify(wil->platform_handle,
@@ -1221,8 +1188,6 @@ int __wil_down(struct wil6210_priv *wil)
 		wil_dbg_misc(wil, "NAPI disable\n");
 	}
 	wil_enable_irq(wil);
-
-	wil_ftm_stop_operations(wil);
 
 	mutex_lock(&wil->p2p_wdev_mutex);
 	wil_p2p_stop_radio_operations(wil);

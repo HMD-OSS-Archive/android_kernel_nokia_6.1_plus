@@ -157,7 +157,7 @@ static struct usb_device_descriptor device_desc = {
 	.bLength =		sizeof device_desc,
 	.bDescriptorType =	USB_DT_DEVICE,
 
-	.bcdUSB =		cpu_to_le16(0x200),
+	/* .bcdUSB = DYNAMIC */
 
 #ifdef CONFIG_GADGET_UAC1_LEGACY
 	.bDeviceClass =		USB_CLASS_PER_INTERFACE,

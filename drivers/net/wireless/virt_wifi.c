@@ -28,7 +28,7 @@ struct virt_wifi_wiphy_priv {
 };
 
 static struct ieee80211_channel channel_2ghz = {
-	.band = IEEE80211_BAND_2GHZ,
+	.band = NL80211_BAND_2GHZ,
 	.center_freq = 2432,
 	.hw_value = 2432,
 	.max_power = 20,
@@ -47,7 +47,7 @@ static struct ieee80211_rate bitrates_2ghz[] = {
 static struct ieee80211_supported_band band_2ghz = {
 	.channels = &channel_2ghz,
 	.bitrates = bitrates_2ghz,
-	.band = IEEE80211_BAND_2GHZ,
+	.band = NL80211_BAND_2GHZ,
 	.n_channels = 1,
 	.n_bitrates = ARRAY_SIZE(bitrates_2ghz),
 	.ht_cap = {
@@ -67,7 +67,7 @@ static struct ieee80211_supported_band band_2ghz = {
 };
 
 static struct ieee80211_channel channel_5ghz = {
-	.band = IEEE80211_BAND_5GHZ,
+	.band = NL80211_BAND_5GHZ,
 	.center_freq = 5240,
 	.hw_value = 5240,
 	.max_power = 20,
@@ -100,7 +100,7 @@ static struct ieee80211_rate bitrates_5ghz[] = {
 static struct ieee80211_supported_band band_5ghz = {
 	.channels = &channel_5ghz,
 	.bitrates = bitrates_5ghz,
-	.band = IEEE80211_BAND_5GHZ,
+	.band = NL80211_BAND_5GHZ,
 	.n_channels = 1,
 	.n_bitrates = ARRAY_SIZE(bitrates_5ghz),
 	.ht_cap = {
@@ -172,6 +172,7 @@ static void virt_wifi_scan_result(struct work_struct *work)
 		container_of(work, struct virt_wifi_wiphy_priv,
 			     scan_result.work);
 	struct wiphy *wiphy = priv_to_wiphy(priv);
+	struct cfg80211_scan_info scan_info = { .aborted = false };
 
 	informed_bss = cfg80211_inform_bss(wiphy, &channel_5ghz,
 					   CFG80211_BSS_FTYPE_PRESP,
@@ -183,7 +184,7 @@ static void virt_wifi_scan_result(struct work_struct *work)
 	cfg80211_put_bss(wiphy, informed_bss);
 
 	/* Schedules work which acquires and releases the rtnl lock. */
-	cfg80211_scan_done(priv->scan_request, false);
+	cfg80211_scan_done(priv->scan_request, &scan_info);
 	priv->scan_request = NULL;
 }
 
@@ -195,8 +196,9 @@ static void virt_wifi_cancel_scan(struct wiphy *wiphy)
 	cancel_delayed_work_sync(&priv->scan_result);
 	/* Clean up dangling callbacks if necessary. */
 	if (priv->scan_request) {
+		struct cfg80211_scan_info scan_info = { .aborted = true };
 		/* Schedules work which acquires and releases the rtnl lock. */
-		cfg80211_scan_done(priv->scan_request, true);
+		cfg80211_scan_done(priv->scan_request, &scan_info);
 		priv->scan_request = NULL;
 	}
 }
@@ -359,9 +361,9 @@ static struct wiphy *virt_wifi_make_wiphy(void)
 	wiphy->max_scan_ie_len = 1000;
 	wiphy->signal_type = CFG80211_SIGNAL_TYPE_MBM;
 
-	wiphy->bands[IEEE80211_BAND_2GHZ] = &band_2ghz;
-	wiphy->bands[IEEE80211_BAND_5GHZ] = &band_5ghz;
-	wiphy->bands[IEEE80211_BAND_60GHZ] = NULL;
+	wiphy->bands[NL80211_BAND_2GHZ] = &band_2ghz;
+	wiphy->bands[NL80211_BAND_5GHZ] = &band_5ghz;
+	wiphy->bands[NL80211_BAND_60GHZ] = NULL;
 
 	wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION);
 
@@ -463,7 +465,7 @@ static void virt_wifi_setup(struct net_device *dev)
 {
 	ether_setup(dev);
 	dev->netdev_ops = &virt_wifi_ops;
-	dev->destructor = virt_wifi_net_device_destructor;
+	dev->priv_destructor = virt_wifi_net_device_destructor;
 }
 
 /* Called in a RCU read critical section from netif_receive_skb */
@@ -491,7 +493,8 @@ static rx_handler_result_t virt_wifi_rx_handler(struct sk_buff **pskb)
 
 /* Called with rtnl lock held. */
 static int virt_wifi_newlink(struct net *src_net, struct net_device *dev,
-			     struct nlattr *tb[], struct nlattr *data[])
+			     struct nlattr *tb[], struct nlattr *data[],
+			     struct netlink_ext_ack *extack)
 {
 	struct virt_wifi_netdev_priv *priv = netdev_priv(dev);
 	int err;

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * fscrypt_supp.h
  *
@@ -80,9 +81,16 @@ extern int fscrypt_ioctl_get_policy(struct file *, void __user *);
 extern int fscrypt_has_permitted_context(struct inode *, struct inode *);
 extern int fscrypt_inherit_context(struct inode *, struct inode *,
 					void *, bool);
+extern int fscrypt_set_bio_ctx(struct inode *inode, struct bio *bio);
+extern int fscrypt_key_payload(struct bio_crypt_ctx *ctx,
+				const unsigned char **key);
+extern int fscrypt_is_hw_encrypt(const struct inode *inode);
+extern int fscrypt_is_sw_encrypt(const struct inode *inode);
+
 /* keyinfo.c */
 extern int fscrypt_get_encryption_info(struct inode *);
-extern void fscrypt_put_encryption_info(struct inode *, struct fscrypt_info *);
+extern void fscrypt_put_encryption_info(struct inode *);
+extern void *fscrypt_crypt_info_act(void *ci, int act);
 
 /* fname.c */
 extern int fscrypt_setup_filename(struct inode *, const struct qstr *,
@@ -196,7 +204,8 @@ extern int __fscrypt_prepare_symlink(struct inode *dir, unsigned int len,
 extern int __fscrypt_encrypt_symlink(struct inode *inode, const char *target,
 				     unsigned int len,
 				     struct fscrypt_str *disk_link);
-extern void *fscrypt_get_symlink(struct inode *inode, const void *caddr,
-				       unsigned int max_size);
+extern const char *fscrypt_get_symlink(struct inode *inode, const void *caddr,
+				       unsigned int max_size,
+				       struct delayed_call *done);
 
 #endif	/* _LINUX_FSCRYPT_SUPP_H */

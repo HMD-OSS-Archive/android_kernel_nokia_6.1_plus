@@ -71,7 +71,6 @@ enum wmi_fw_capability {
 	WMI_FW_CAPABILITY_RSSI_REPORTING		= 12,
 	WMI_FW_CAPABILITY_SET_SILENT_RSSI_TABLE		= 13,
 	WMI_FW_CAPABILITY_LO_POWER_CALIB_FROM_OTP	= 14,
-	WMI_FW_CAPABILITY_CONNECT_SNR_THR		= 16,
 	WMI_FW_CAPABILITY_MAX,
 };
 
@@ -1822,7 +1821,7 @@ struct wmi_rx_mgmt_info {
 	u8 range;
 	u8 sqi;
 	__le16 stype;
-	__le16 snr;
+	__le16 status;
 	__le32 len;
 	/* Not resolved when == 0xFFFFFFFF == > Broadcast to all MIDS */
 	u8 qid;

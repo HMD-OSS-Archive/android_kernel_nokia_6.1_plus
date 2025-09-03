@@ -27,7 +27,6 @@
 
 #define HTT_RX_RING_SIZE HTT_RX_RING_SIZE_MAX
 #define HTT_RX_RING_FILL_LEVEL (((HTT_RX_RING_SIZE) / 2) - 1)
-#define HTT_RX_RING_FILL_LEVEL_DUAL_MAC (HTT_RX_RING_SIZE - 1)
 
 /* when under memory pressure rx ring refill may fail and needs a retry */
 #define HTT_RX_RING_REFILL_RETRY_MS 50
@@ -37,7 +36,7 @@
 static int ath10k_htt_rx_get_csum_state(struct sk_buff *skb);
 
 static struct sk_buff *
-ath10k_htt_rx_find_skb_paddr(struct ath10k *ar, u64 paddr)
+ath10k_htt_rx_find_skb_paddr(struct ath10k *ar, u32 paddr)
 {
 	struct ath10k_skb_rxcb *rxcb;
 
@@ -130,16 +129,13 @@ static int __ath10k_htt_rx_ring_fill_n(struct ath10k_htt *htt, int num)
 		rxcb = ATH10K_SKB_RXCB(skb);
 		rxcb->paddr = paddr;
 		htt->rx_ring.netbufs_ring[idx] = skb;
-		if (QCA_REV_WCN3990(htt->ar))
-			htt->rx_ring.paddrs_ring[idx] = __cpu_to_le64(paddr);
-		else
-			htt->rx_ring.paddrs_ring[idx] = __cpu_to_le32(paddr);
+		htt->rx_ring.paddrs_ring[idx] = __cpu_to_le32(paddr);
 		htt->rx_ring.fill_cnt++;
 
 		if (htt->rx_ring.in_ord_rx) {
 			hash_add(htt->rx_ring.skb_table,
 				 &ATH10K_SKB_RXCB(skb)->hlist,
-				 paddr);
+				 (u32)paddr);
 		}
 
 		num--;
@@ -181,7 +177,8 @@ static void ath10k_htt_rx_msdu_buff_replenish(struct ath10k_htt *htt)
 	 * automatically balances load wrt to CPU power.
 	 *
 	 * This probably comes at a cost of lower maximum throughput but
-	 * improves the average and stability. */
+	 * improves the average and stability.
+	 */
 	spin_lock_bh(&htt->rx_ring.lock);
 	num_deficit = htt->rx_ring.fill_level - htt->rx_ring.fill_cnt;
 	num_to_fill = min(ATH10K_HTT_MAX_NUM_REFILL, num_deficit);
@@ -311,7 +308,8 @@ static int ath10k_htt_rx_amsdu_pop(struct ath10k_htt *htt,
 		rx_desc = (struct htt_rx_desc *)msdu->data;
 
 		/* FIXME: we must report msdu payload since this is what caller
-		 *        expects now */
+		 * expects now
+		 */
 		skb_put(msdu, offsetof(struct htt_rx_desc, msdu_payload));
 		skb_pull(msdu, offsetof(struct htt_rx_desc, msdu_payload));
 
@@ -388,7 +386,7 @@ static int ath10k_htt_rx_amsdu_pop(struct ath10k_htt *htt,
 }
 
 static struct sk_buff *ath10k_htt_rx_pop_paddr(struct ath10k_htt *htt,
-					       u64 paddr)
+					       u32 paddr)
 {
 	struct ath10k *ar = htt->ar;
 	struct ath10k_skb_rxcb *rxcb;
@@ -423,7 +421,7 @@ static int ath10k_htt_rx_pop_paddr_list(struct ath10k_htt *htt,
 	struct sk_buff *msdu;
 	int msdu_count;
 	bool is_offload;
-	u64 paddr;
+	u32 paddr;
 
 	lockdep_assert_held(&htt->rx_ring.lock);
 
@@ -431,12 +429,8 @@ static int ath10k_htt_rx_pop_paddr_list(struct ath10k_htt *htt,
 	is_offload = !!(ev->info & HTT_RX_IN_ORD_IND_INFO_OFFLOAD_MASK);
 
 	while (msdu_count--) {
-#ifdef CONFIG_ATH10K_SNOC
-		paddr = __le64_to_cpu(msdu_desc->msdu_paddr);
-		paddr &= HTT_WCN3990_ARCH_PADDR_MASK;
-#else
 		paddr = __le32_to_cpu(msdu_desc->msdu_paddr);
-#endif
+
 		msdu = ath10k_htt_rx_pop_paddr(htt, paddr);
 		if (!msdu) {
 			__skb_queue_purge(list);
@@ -482,15 +476,7 @@ int ath10k_htt_rx_alloc(struct ath10k_htt *htt)
 	 */
 	htt->rx_ring.size = HTT_RX_RING_SIZE;
 	htt->rx_ring.size_mask = htt->rx_ring.size - 1;
-
-	switch (ar->hw_rev) {
-	case ATH10K_HW_WCN3990:
-		htt->rx_ring.fill_level = HTT_RX_RING_FILL_LEVEL_DUAL_MAC;
-		break;
-	default:
-		htt->rx_ring.fill_level = HTT_RX_RING_FILL_LEVEL;
-		break;
-	}
+	htt->rx_ring.fill_level = HTT_RX_RING_FILL_LEVEL;
 
 	if (!is_power_of_2(htt->rx_ring.size)) {
 		ath10k_warn(ar, "htt rx ring size is not power of 2\n");
@@ -659,16 +645,17 @@ static void ath10k_htt_rx_h_rates(struct ath10k *ar,
 		sgi = (info3 >> 7) & 1;
 
 		status->rate_idx = mcs;
-		status->flag |= RX_FLAG_HT;
+		status->encoding = RX_ENC_HT;
 		if (sgi)
-			status->flag |= RX_FLAG_SHORT_GI;
+			status->enc_flags |= RX_ENC_FLAG_SHORT_GI;
 		if (bw)
-			status->flag |= RX_FLAG_40MHZ;
+			status->bw = RATE_INFO_BW_40;
 		break;
 	case HTT_RX_VHT:
 	case HTT_RX_VHT_WITH_TXBF:
 		/* VHT-SIG-A1 in info2, VHT-SIG-A2 in info3
-		   TODO check this */
+		 * TODO check this
+		 */
 		bw = info2 & 3;
 		sgi = info3 & 1;
 		group_id = (info2 >> 4) & 0x3F;
@@ -715,10 +702,10 @@ static void ath10k_htt_rx_h_rates(struct ath10k *ar,
 		}
 
 		status->rate_idx = mcs;
-		status->vht_nss = nss;
+		status->nss = nss;
 
 		if (sgi)
-			status->flag |= RX_FLAG_SHORT_GI;
+			status->enc_flags |= RX_ENC_FLAG_SHORT_GI;
 
 		switch (bw) {
 		/* 20MHZ */
@@ -726,14 +713,18 @@ static void ath10k_htt_rx_h_rates(struct ath10k *ar,
 			break;
 		/* 40MHZ */
 		case 1:
-			status->flag |= RX_FLAG_40MHZ;
+			status->bw = RATE_INFO_BW_40;
 			break;
 		/* 80MHZ */
 		case 2:
-			status->vht_flag |= RX_VHT_FLAG_80MHZ;
+			status->bw = RATE_INFO_BW_80;
+			break;
+		case 3:
+			status->bw = RATE_INFO_BW_160;
+			break;
 		}
 
-		status->flag |= RX_FLAG_VHT;
+		status->encoding = RX_ENC_VHT;
 		break;
 	default:
 		break;
@@ -851,6 +842,19 @@ static void ath10k_htt_rx_h_signal(struct ath10k *ar,
 				   struct ieee80211_rx_status *status,
 				   struct htt_rx_desc *rxd)
 {
+	int i;
+
+	for (i = 0; i < IEEE80211_MAX_CHAINS ; i++) {
+		status->chains &= ~BIT(i);
+
+		if (rxd->ppdu_start.rssi_chains[i].pri20_mhz != 0x80) {
+			status->chain_signal[i] = ATH10K_DEFAULT_NOISE_FLOOR +
+				rxd->ppdu_start.rssi_chains[i].pri20_mhz;
+
+			status->chains |= BIT(i);
+		}
+	}
+
 	/* FIXME: Get real NF */
 	status->signal = ATH10K_DEFAULT_NOISE_FLOOR +
 			 rxd->ppdu_start.rssi_comb;
@@ -896,22 +900,29 @@ static void ath10k_htt_rx_h_ppdu(struct ath10k *ar,
 		/* New PPDU starts so clear out the old per-PPDU status. */
 		status->freq = 0;
 		status->rate_idx = 0;
-		status->vht_nss = 0;
-		status->vht_flag &= ~RX_VHT_FLAG_80MHZ;
-		status->flag &= ~(RX_FLAG_HT |
-				  RX_FLAG_VHT |
-				  RX_FLAG_SHORT_GI |
-				  RX_FLAG_40MHZ |
-				  RX_FLAG_MACTIME_END);
+		status->nss = 0;
+		status->encoding = RX_ENC_LEGACY;
+		status->bw = RATE_INFO_BW_20;
+
+		status->flag &= ~RX_FLAG_MACTIME_END;
 		status->flag |= RX_FLAG_NO_SIGNAL_VAL;
+
+		status->flag &= ~(RX_FLAG_AMPDU_IS_LAST);
+		status->flag |= RX_FLAG_AMPDU_DETAILS | RX_FLAG_AMPDU_LAST_KNOWN;
+		status->ampdu_reference = ar->ampdu_reference;
 
 		ath10k_htt_rx_h_signal(ar, status, rxd);
 		ath10k_htt_rx_h_channel(ar, status, rxd, vdev_id);
 		ath10k_htt_rx_h_rates(ar, status, rxd);
 	}
 
-	if (is_last_ppdu)
+	if (is_last_ppdu) {
 		ath10k_htt_rx_h_mactime(ar, status, rxd);
+
+		/* set ampdu last segment flag */
+		status->flag |= RX_FLAG_AMPDU_IS_LAST;
+		ar->ampdu_reference++;
+	}
 }
 
 static const char * const tid_to_ac[] = {
@@ -953,9 +964,9 @@ static void ath10k_process_rx(struct ath10k *ar,
 
 	status = IEEE80211_SKB_RXCB(skb);
 	*status = *rx_status;
-	fill_datapath_stats(ar, status);
+
 	ath10k_dbg(ar, ATH10K_DBG_DATA,
-		   "rx skb %pK len %u peer %pM %s %s sn %u %s%s%s%s%s %srate_idx %u vht_nss %u freq %u band %u flag 0x%llx fcs-err %i mic-err %i amsdu-more %i\n",
+		   "rx skb %pK len %u peer %pM %s %s sn %u %s%s%s%s%s%s %srate_idx %u vht_nss %u freq %u band %u flag 0x%x fcs-err %i mic-err %i amsdu-more %i\n",
 		   skb,
 		   skb->len,
 		   ieee80211_get_SA(hdr),
@@ -963,15 +974,15 @@ static void ath10k_process_rx(struct ath10k *ar,
 		   is_multicast_ether_addr(ieee80211_get_DA(hdr)) ?
 							"mcast" : "ucast",
 		   (__le16_to_cpu(hdr->seq_ctrl) & IEEE80211_SCTL_SEQ) >> 4,
-		   (status->flag & (RX_FLAG_HT | RX_FLAG_VHT)) == 0 ?
-							"legacy" : "",
-		   status->flag & RX_FLAG_HT ? "ht" : "",
-		   status->flag & RX_FLAG_VHT ? "vht" : "",
-		   status->flag & RX_FLAG_40MHZ ? "40" : "",
-		   status->vht_flag & RX_VHT_FLAG_80MHZ ? "80" : "",
-		   status->flag & RX_FLAG_SHORT_GI ? "sgi " : "",
+		   (status->encoding == RX_ENC_LEGACY) ? "legacy" : "",
+		   (status->encoding == RX_ENC_HT) ? "ht" : "",
+		   (status->encoding == RX_ENC_VHT) ? "vht" : "",
+		   (status->bw == RATE_INFO_BW_40) ? "40" : "",
+		   (status->bw == RATE_INFO_BW_80) ? "80" : "",
+		   (status->bw == RATE_INFO_BW_160) ? "160" : "",
+		   status->enc_flags & RX_ENC_FLAG_SHORT_GI ? "sgi " : "",
 		   status->rate_idx,
-		   status->vht_nss,
+		   status->nss,
 		   status->freq,
 		   status->band, status->flag,
 		   !!(status->flag & RX_FLAG_FAILED_FCS_CRC),
@@ -982,7 +993,6 @@ static void ath10k_process_rx(struct ath10k *ar,
 	trace_ath10k_rx_hdr(ar, skb->data, skb->len);
 	trace_ath10k_rx_payload(ar, skb->data, skb->len);
 
-	ath10k_rx_record_pktlog(ar, skb);
 	ieee80211_rx_napi(ar->hw, NULL, skb, &ar->napi);
 }
 
@@ -1556,8 +1566,7 @@ static int ath10k_unchain_msdu(struct sk_buff_head *amsdu)
 }
 
 static void ath10k_htt_rx_h_unchain(struct ath10k *ar,
-				    struct sk_buff_head *amsdu,
-				    bool chained)
+				    struct sk_buff_head *amsdu)
 {
 	struct sk_buff *first;
 	struct htt_rx_desc *rxd;
@@ -1567,9 +1576,6 @@ static void ath10k_htt_rx_h_unchain(struct ath10k *ar,
 	rxd = (void *)first->data - sizeof(*rxd);
 	decap = MS(__le32_to_cpu(rxd->msdu_start.common.info1),
 		   RX_MSDU_START_INFO1_DECAP_FORMAT);
-
-	if (!chained)
-		return;
 
 	/* FIXME: Current unchaining logic can only handle simple case of raw
 	 * msdu chaining. If decapping is other than raw the chaining may be
@@ -1594,7 +1600,7 @@ static bool ath10k_htt_rx_amsdu_allowed(struct ath10k *ar,
 	 */
 
 	if (!rx_status->freq) {
-		ath10k_warn(ar, "no channel configured; ignoring frame(s)!\n");
+		ath10k_dbg(ar, ATH10K_DBG_HTT, "no channel configured; ignoring frame(s)!\n");
 		return false;
 	}
 
@@ -1648,7 +1654,11 @@ static int ath10k_htt_rx_handle_amsdu(struct ath10k_htt *htt)
 
 	num_msdus = skb_queue_len(&amsdu);
 	ath10k_htt_rx_h_ppdu(ar, &amsdu, rx_status, 0xffff);
-	ath10k_htt_rx_h_unchain(ar, &amsdu, ret > 0);
+
+	/* only for ret = 1 indicates chained msdus */
+	if (ret > 0)
+		ath10k_htt_rx_h_unchain(ar, &amsdu);
+
 	ath10k_htt_rx_h_filter(ar, &amsdu, rx_status);
 	ath10k_htt_rx_h_mpdu(ar, &amsdu, rx_status, true);
 	ath10k_htt_rx_h_deliver(ar, &amsdu, rx_status);
@@ -1810,8 +1820,7 @@ static void ath10k_htt_rx_delba(struct ath10k *ar, struct htt_resp *resp)
 	spin_unlock_bh(&ar->data_lock);
 }
 
-static int ath10k_htt_rx_extract_amsdu(struct ath10k *ar,
-				       struct sk_buff_head *list,
+static int ath10k_htt_rx_extract_amsdu(struct sk_buff_head *list,
 				       struct sk_buff_head *amsdu)
 {
 	struct sk_buff *msdu;
@@ -1831,9 +1840,6 @@ static int ath10k_htt_rx_extract_amsdu(struct ath10k *ar,
 		    __cpu_to_le32(RX_MSDU_END_INFO0_LAST_MSDU))
 			break;
 	}
-
-	if (QCA_REV_WCN3990(ar))
-		return 0;
 
 	msdu = skb_peek_tail(amsdu);
 	rxd = (void *)msdu->data - sizeof(*rxd);
@@ -1977,7 +1983,7 @@ static int ath10k_htt_rx_in_ord_ind(struct ath10k *ar, struct sk_buff *skb)
 
 	while (!skb_queue_empty(&list)) {
 		__skb_queue_head_init(&amsdu);
-		ret = ath10k_htt_rx_extract_amsdu(ar, &list, &amsdu);
+		ret = ath10k_htt_rx_extract_amsdu(&list, &amsdu);
 		switch (ret) {
 		case 0:
 			/* Note: The in-order indication may report interleaved
@@ -2291,6 +2297,136 @@ void ath10k_htt_htc_t2h_msg_handler(struct ath10k *ar, struct sk_buff *skb)
 		dev_kfree_skb_any(skb);
 }
 
+static inline bool is_valid_legacy_rate(u8 rate)
+{
+	static const u8 legacy_rates[] = {1, 2, 5, 11, 6, 9, 12,
+					  18, 24, 36, 48, 54};
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(legacy_rates); i++) {
+		if (rate == legacy_rates[i])
+			return true;
+	}
+
+	return false;
+}
+
+static void
+ath10k_update_per_peer_tx_stats(struct ath10k *ar,
+				struct ieee80211_sta *sta,
+				struct ath10k_per_peer_tx_stats *peer_stats)
+{
+	struct ath10k_sta *arsta = (struct ath10k_sta *)sta->drv_priv;
+	u8 rate = 0, sgi;
+	struct rate_info txrate;
+
+	lockdep_assert_held(&ar->data_lock);
+
+	txrate.flags = ATH10K_HW_PREAMBLE(peer_stats->ratecode);
+	txrate.bw = ATH10K_HW_BW(peer_stats->flags);
+	txrate.nss = ATH10K_HW_NSS(peer_stats->ratecode);
+	txrate.mcs = ATH10K_HW_MCS_RATE(peer_stats->ratecode);
+	sgi = ATH10K_HW_GI(peer_stats->flags);
+
+	if (txrate.flags == WMI_RATE_PREAMBLE_VHT && txrate.mcs > 9) {
+		ath10k_warn(ar, "Invalid VHT mcs %hhd peer stats",  txrate.mcs);
+		return;
+	}
+
+	if (txrate.flags == WMI_RATE_PREAMBLE_HT &&
+	    (txrate.mcs > 7 || txrate.nss < 1)) {
+		ath10k_warn(ar, "Invalid HT mcs %hhd nss %hhd peer stats",
+			    txrate.mcs, txrate.nss);
+		return;
+	}
+
+	memset(&arsta->txrate, 0, sizeof(arsta->txrate));
+
+	if (txrate.flags == WMI_RATE_PREAMBLE_CCK ||
+	    txrate.flags == WMI_RATE_PREAMBLE_OFDM) {
+		rate = ATH10K_HW_LEGACY_RATE(peer_stats->ratecode);
+
+		if (!is_valid_legacy_rate(rate)) {
+			ath10k_warn(ar, "Invalid legacy rate %hhd peer stats",
+				    rate);
+			return;
+		}
+
+		/* This is hacky, FW sends CCK rate 5.5Mbps as 6 */
+		rate *= 10;
+		if (rate == 60 && txrate.flags == WMI_RATE_PREAMBLE_CCK)
+			rate = rate - 5;
+		arsta->txrate.legacy = rate;
+	} else if (txrate.flags == WMI_RATE_PREAMBLE_HT) {
+		arsta->txrate.flags = RATE_INFO_FLAGS_MCS;
+		arsta->txrate.mcs = txrate.mcs + 8 * (txrate.nss - 1);
+	} else {
+		arsta->txrate.flags = RATE_INFO_FLAGS_VHT_MCS;
+		arsta->txrate.mcs = txrate.mcs;
+	}
+
+	if (sgi)
+		arsta->txrate.flags |= RATE_INFO_FLAGS_SHORT_GI;
+
+	arsta->txrate.nss = txrate.nss;
+	arsta->txrate.bw = txrate.bw + RATE_INFO_BW_20;
+}
+
+static void ath10k_htt_fetch_peer_stats(struct ath10k *ar,
+					struct sk_buff *skb)
+{
+	struct htt_resp *resp = (struct htt_resp *)skb->data;
+	struct ath10k_per_peer_tx_stats *p_tx_stats = &ar->peer_tx_stats;
+	struct htt_per_peer_tx_stats_ind *tx_stats;
+	struct ieee80211_sta *sta;
+	struct ath10k_peer *peer;
+	int peer_id, i;
+	u8 ppdu_len, num_ppdu;
+
+	num_ppdu = resp->peer_tx_stats.num_ppdu;
+	ppdu_len = resp->peer_tx_stats.ppdu_len * sizeof(__le32);
+
+	if (skb->len < sizeof(struct htt_resp_hdr) + num_ppdu * ppdu_len) {
+		ath10k_warn(ar, "Invalid peer stats buf length %d\n", skb->len);
+		return;
+	}
+
+	tx_stats = (struct htt_per_peer_tx_stats_ind *)
+			(resp->peer_tx_stats.payload);
+	peer_id = __le16_to_cpu(tx_stats->peer_id);
+
+	rcu_read_lock();
+	spin_lock_bh(&ar->data_lock);
+	peer = ath10k_peer_find_by_id(ar, peer_id);
+	if (!peer) {
+		ath10k_warn(ar, "Invalid peer id %d peer stats buffer\n",
+			    peer_id);
+		goto out;
+	}
+
+	sta = peer->sta;
+	for (i = 0; i < num_ppdu; i++) {
+		tx_stats = (struct htt_per_peer_tx_stats_ind *)
+			   (resp->peer_tx_stats.payload + i * ppdu_len);
+
+		p_tx_stats->succ_bytes = __le32_to_cpu(tx_stats->succ_bytes);
+		p_tx_stats->retry_bytes = __le32_to_cpu(tx_stats->retry_bytes);
+		p_tx_stats->failed_bytes =
+				__le32_to_cpu(tx_stats->failed_bytes);
+		p_tx_stats->ratecode = tx_stats->ratecode;
+		p_tx_stats->flags = tx_stats->flags;
+		p_tx_stats->succ_pkts = __le16_to_cpu(tx_stats->succ_pkts);
+		p_tx_stats->retry_pkts = __le16_to_cpu(tx_stats->retry_pkts);
+		p_tx_stats->failed_pkts = __le16_to_cpu(tx_stats->failed_pkts);
+
+		ath10k_update_per_peer_tx_stats(ar, sta, p_tx_stats);
+	}
+
+out:
+	spin_unlock_bh(&ar->data_lock);
+	rcu_read_unlock();
+}
+
 bool ath10k_htt_t2h_msg_handler(struct ath10k *ar, struct sk_buff *skb)
 {
 	struct ath10k_htt *htt = &ar->htt;
@@ -2426,8 +2562,7 @@ bool ath10k_htt_t2h_msg_handler(struct ath10k *ar, struct sk_buff *skb)
 		u32 phymode = __le32_to_cpu(resp->chan_change.phymode);
 		u32 freq = __le32_to_cpu(resp->chan_change.freq);
 
-		ar->tgt_oper_chan =
-			__ieee80211_get_channel(ar->hw->wiphy, freq);
+		ar->tgt_oper_chan = ieee80211_get_channel(ar->hw->wiphy, freq);
 		ath10k_dbg(ar, ATH10K_DBG_HTT,
 			   "htt chan change freq %u phymode %s\n",
 			   freq, ath10k_wmi_phymode_str(phymode));
@@ -2451,6 +2586,9 @@ bool ath10k_htt_t2h_msg_handler(struct ath10k *ar, struct sk_buff *skb)
 	case HTT_T2H_MSG_TYPE_TX_MODE_SWITCH_IND:
 		ath10k_htt_rx_tx_mode_switch_ind(ar, skb);
 		break;
+	case HTT_T2H_MSG_TYPE_PEER_STATS:
+		ath10k_htt_fetch_peer_stats(ar, skb);
+		break;
 	case HTT_T2H_MSG_TYPE_EN_STATS:
 	default:
 		ath10k_warn(ar, "htt event (%d) not handled\n",
@@ -2458,7 +2596,7 @@ bool ath10k_htt_t2h_msg_handler(struct ath10k *ar, struct sk_buff *skb)
 		ath10k_dbg_dump(ar, ATH10K_DBG_HTT_DUMP, NULL, "htt event: ",
 				skb->data, skb->len);
 		break;
-	};
+	}
 	return true;
 }
 EXPORT_SYMBOL(ath10k_htt_t2h_msg_handler);

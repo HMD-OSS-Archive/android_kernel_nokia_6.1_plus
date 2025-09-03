@@ -19,17 +19,12 @@
 #include <net/netlink.h>
 #include "wil6210.h"
 #include "wmi.h"
-#include "ftm.h"
 
 #define WIL_MAX_ROC_DURATION_MS 5000
 
 bool disable_ap_sme;
 module_param(disable_ap_sme, bool, 0444);
 MODULE_PARM_DESC(disable_ap_sme, " let user space handle AP mode SME");
-
-static bool ignore_reg_hints = true;
-module_param(ignore_reg_hints, bool, 0444);
-MODULE_PARM_DESC(ignore_reg_hints, " Ignore OTA regulatory hints (Default: true)");
 
 #ifdef CONFIG_PM
 static struct wiphy_wowlan_support wil_wowlan_support = {
@@ -38,7 +33,7 @@ static struct wiphy_wowlan_support wil_wowlan_support = {
 #endif
 
 #define CHAN60G(_channel, _flags) {				\
-	.band			= IEEE80211_BAND_60GHZ,		\
+	.band			= NL80211_BAND_60GHZ,		\
 	.center_freq		= 56160 + (2160 * (_channel)),	\
 	.hw_value		= (_channel),			\
 	.flags			= (_flags),			\
@@ -120,15 +115,6 @@ nla_policy wil_rf_sector_cfg_policy[QCA_ATTR_DMG_RF_SECTOR_CFG_MAX + 1] = {
 };
 
 enum qca_nl80211_vendor_subcmds {
-	QCA_NL80211_VENDOR_SUBCMD_LOC_GET_CAPA = 128,
-	QCA_NL80211_VENDOR_SUBCMD_FTM_START_SESSION = 129,
-	QCA_NL80211_VENDOR_SUBCMD_FTM_ABORT_SESSION = 130,
-	QCA_NL80211_VENDOR_SUBCMD_FTM_MEAS_RESULT = 131,
-	QCA_NL80211_VENDOR_SUBCMD_FTM_SESSION_DONE = 132,
-	QCA_NL80211_VENDOR_SUBCMD_FTM_CFG_RESPONDER = 133,
-	QCA_NL80211_VENDOR_SUBCMD_AOA_MEAS = 134,
-	QCA_NL80211_VENDOR_SUBCMD_AOA_ABORT_MEAS = 135,
-	QCA_NL80211_VENDOR_SUBCMD_AOA_MEAS_RESULT = 136,
 	QCA_NL80211_VENDOR_SUBCMD_DMG_RF_GET_SECTOR_CFG = 139,
 	QCA_NL80211_VENDOR_SUBCMD_DMG_RF_SET_SECTOR_CFG = 140,
 	QCA_NL80211_VENDOR_SUBCMD_DMG_RF_GET_SELECTED_SECTOR = 141,
@@ -150,48 +136,6 @@ static int wil_rf_sector_set_selected(struct wiphy *wiphy,
 
 /* vendor specific commands */
 static const struct wiphy_vendor_command wil_nl80211_vendor_commands[] = {
-	{
-		.info.vendor_id = QCA_NL80211_VENDOR_ID,
-		.info.subcmd = QCA_NL80211_VENDOR_SUBCMD_LOC_GET_CAPA,
-		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
-			 WIPHY_VENDOR_CMD_NEED_RUNNING,
-		.doit = wil_ftm_get_capabilities
-	},
-	{
-		.info.vendor_id = QCA_NL80211_VENDOR_ID,
-		.info.subcmd = QCA_NL80211_VENDOR_SUBCMD_FTM_START_SESSION,
-		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
-			 WIPHY_VENDOR_CMD_NEED_RUNNING,
-		.doit = wil_ftm_start_session
-	},
-	{
-		.info.vendor_id = QCA_NL80211_VENDOR_ID,
-		.info.subcmd = QCA_NL80211_VENDOR_SUBCMD_FTM_ABORT_SESSION,
-		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
-			 WIPHY_VENDOR_CMD_NEED_RUNNING,
-		.doit = wil_ftm_abort_session
-	},
-	{
-		.info.vendor_id = QCA_NL80211_VENDOR_ID,
-		.info.subcmd = QCA_NL80211_VENDOR_SUBCMD_FTM_CFG_RESPONDER,
-		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
-			 WIPHY_VENDOR_CMD_NEED_RUNNING,
-		.doit = wil_ftm_configure_responder
-	},
-	{
-		.info.vendor_id = QCA_NL80211_VENDOR_ID,
-		.info.subcmd = QCA_NL80211_VENDOR_SUBCMD_AOA_MEAS,
-		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
-			 WIPHY_VENDOR_CMD_NEED_RUNNING,
-		.doit = wil_aoa_start_measurement
-	},
-	{
-		.info.vendor_id = QCA_NL80211_VENDOR_ID,
-		.info.subcmd = QCA_NL80211_VENDOR_SUBCMD_AOA_ABORT_MEAS,
-		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
-			 WIPHY_VENDOR_CMD_NEED_RUNNING,
-		.doit = wil_aoa_abort_measurement
-	},
 	{
 		.info.vendor_id = QCA_NL80211_VENDOR_ID,
 		.info.subcmd = QCA_NL80211_VENDOR_SUBCMD_DMG_RF_GET_SECTOR_CFG,
@@ -221,22 +165,6 @@ static const struct wiphy_vendor_command wil_nl80211_vendor_commands[] = {
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_RUNNING,
 		.doit = wil_rf_sector_set_selected
-	},
-};
-
-/* vendor specific events */
-static const struct nl80211_vendor_cmd_info wil_nl80211_vendor_events[] = {
-	[QCA_NL80211_VENDOR_EVENT_FTM_MEAS_RESULT_INDEX] = {
-			.vendor_id = QCA_NL80211_VENDOR_ID,
-			.subcmd = QCA_NL80211_VENDOR_SUBCMD_FTM_MEAS_RESULT
-	},
-	[QCA_NL80211_VENDOR_EVENT_FTM_SESSION_DONE_INDEX] = {
-			.vendor_id = QCA_NL80211_VENDOR_ID,
-			.subcmd = QCA_NL80211_VENDOR_SUBCMD_FTM_SESSION_DONE
-	},
-	[QCA_NL80211_VENDOR_EVENT_AOA_MEAS_RESULT_INDEX] = {
-			.vendor_id = QCA_NL80211_VENDOR_ID,
-			.subcmd = QCA_NL80211_VENDOR_SUBCMD_AOA_MEAS_RESULT
 	},
 };
 
@@ -377,9 +305,8 @@ int wil_cid_fill_sinfo(struct wil6210_priv *wil, int cid,
 			BIT(NL80211_STA_INFO_RX_DROP_MISC) |
 			BIT(NL80211_STA_INFO_TX_FAILED);
 
-	sinfo->txrate.flags = RATE_INFO_FLAGS_MCS | RATE_INFO_FLAGS_60G;
+	sinfo->txrate.flags = RATE_INFO_FLAGS_60G;
 	sinfo->txrate.mcs = le16_to_cpu(reply.evt.bf_mcs);
-	sinfo->rxrate.flags = RATE_INFO_FLAGS_MCS | RATE_INFO_FLAGS_60G;
 	sinfo->rxrate.mcs = stats->last_mcs_rx;
 	sinfo->rx_bytes = stats->rx_bytes;
 	sinfo->rx_packets = stats->rx_packets;
@@ -487,7 +414,7 @@ static struct wireless_dev *
 wil_cfg80211_add_iface(struct wiphy *wiphy, const char *name,
 		       unsigned char name_assign_type,
 		       enum nl80211_iftype type,
-		       u32 *flags, struct vif_params *params)
+		       struct vif_params *params)
 {
 	struct wil6210_priv *wil = wiphy_to_wil(wiphy);
 	struct net_device *ndev = wil_to_ndev(wil);
@@ -539,7 +466,7 @@ static int wil_cfg80211_del_iface(struct wiphy *wiphy,
 
 static int wil_cfg80211_change_iface(struct wiphy *wiphy,
 				     struct net_device *ndev,
-				     enum nl80211_iftype type, u32 *flags,
+				     enum nl80211_iftype type,
 				     struct vif_params *params)
 {
 	struct wil6210_priv *wil = wiphy_to_wil(wiphy);
@@ -566,11 +493,8 @@ static int wil_cfg80211_change_iface(struct wiphy *wiphy,
 	case NL80211_IFTYPE_P2P_GO:
 		break;
 	case NL80211_IFTYPE_MONITOR:
-		if (flags)
-			wil->monitor_flags = *flags;
-		else
-			wil->monitor_flags = 0;
-
+		if (params->flags)
+			wil->monitor_flags = params->flags;
 		break;
 	default:
 		return -EOPNOTSUPP;
@@ -977,7 +901,7 @@ int wil_cfg80211_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
 			 u64 *cookie)
 {
 	const u8 *buf = params->buf;
-	size_t len = params->len, total;
+	size_t len = params->len;
 	struct wil6210_priv *wil = wiphy_to_wil(wiphy);
 	int rc;
 	bool tx_status = false;
@@ -1002,11 +926,7 @@ int wil_cfg80211_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
 	if (len < sizeof(struct ieee80211_hdr_3addr))
 		return -EINVAL;
 
-	total = sizeof(*cmd) + len;
-	if (total < len)
-		return -EINVAL;
-
-	cmd = kmalloc(total, GFP_KERNEL);
+	cmd = kmalloc(sizeof(*cmd) + len, GFP_KERNEL);
 	if (!cmd) {
 		rc = -ENOMEM;
 		goto out;
@@ -1016,7 +936,7 @@ int wil_cfg80211_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
 	cmd->len = cpu_to_le16(len);
 	memcpy(cmd->payload, buf, len);
 
-	rc = wmi_call(wil, WMI_SW_TX_REQ_CMDID, cmd, total,
+	rc = wmi_call(wil, WMI_SW_TX_REQ_CMDID, cmd, sizeof(*cmd) + len,
 		      WMI_SW_TX_COMPLETE_EVENTID, &evt, sizeof(evt), 2000);
 	if (rc == 0)
 		tx_status = !evt.evt.status;
@@ -1304,6 +1224,12 @@ static int _wil_cfg80211_merge_extra_ies(const u8 *ies1, u16 ies1_len,
 	u8 *buf, *dpos;
 	const u8 *spos;
 
+	if (!ies1)
+		ies1_len = 0;
+
+	if (!ies2)
+		ies2_len = 0;
+
 	if (ies1_len == 0 && ies2_len == 0) {
 		*merged_ies = NULL;
 		*merged_len = 0;
@@ -1313,17 +1239,19 @@ static int _wil_cfg80211_merge_extra_ies(const u8 *ies1, u16 ies1_len,
 	buf = kmalloc(ies1_len + ies2_len, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
-	memcpy(buf, ies1, ies1_len);
+	if (ies1)
+		memcpy(buf, ies1, ies1_len);
 	dpos = buf + ies1_len;
 	spos = ies2;
-	while (spos + 1 < ies2 + ies2_len) {
+	while (spos && (spos + 1 < ies2 + ies2_len)) {
 		/* IE tag at offset 0, length at offset 1 */
 		u16 ielen = 2 + spos[1];
 
 		if (spos + ielen > ies2 + ies2_len)
 			break;
 		if (spos[0] == WLAN_EID_VENDOR_SPECIFIC &&
-		    !_wil_cfg80211_find_ie(ies1, ies1_len, spos, ielen)) {
+		    (!ies1 || !_wil_cfg80211_find_ie(ies1, ies1_len,
+						     spos, ielen))) {
 			memcpy(dpos, spos, ielen);
 			dpos += ielen;
 		}
@@ -1824,7 +1752,7 @@ static int wil_cfg80211_resume(struct wiphy *wiphy)
 	return 0;
 }
 
-static struct cfg80211_ops wil_cfg80211_ops = {
+static const struct cfg80211_ops wil_cfg80211_ops = {
 	.add_virtual_intf = wil_cfg80211_add_iface,
 	.del_virtual_intf = wil_cfg80211_del_iface,
 	.scan = wil_cfg80211_scan,
@@ -1883,7 +1811,7 @@ static void wil_wiphy_init(struct wiphy *wiphy)
 		NL80211_PROBE_RESP_OFFLOAD_SUPPORT_WPS2 |
 		NL80211_PROBE_RESP_OFFLOAD_SUPPORT_P2P;
 
-	wiphy->bands[IEEE80211_BAND_60GHZ] = &wil_band_60ghz;
+	wiphy->bands[NL80211_BAND_60GHZ] = &wil_band_60ghz;
 
 	/* may change after reading FW capabilities */
 	wiphy->signal_type = CFG80211_SIGNAL_TYPE_UNSPEC;
@@ -1895,13 +1823,6 @@ static void wil_wiphy_init(struct wiphy *wiphy)
 
 	wiphy->n_vendor_commands = ARRAY_SIZE(wil_nl80211_vendor_commands);
 	wiphy->vendor_commands = wil_nl80211_vendor_commands;
-	wiphy->vendor_events = wil_nl80211_vendor_events;
-	wiphy->n_vendor_events = ARRAY_SIZE(wil_nl80211_vendor_events);
-
-	if (ignore_reg_hints) {
-		wiphy->regulatory_flags |= REGULATORY_DISABLE_BEACON_HINTS;
-		wiphy->regulatory_flags |= REGULATORY_COUNTRY_IE_IGNORE;
-	}
 
 #ifdef CONFIG_PM
 	wiphy->wowlan = &wil_wowlan_support;
@@ -2005,7 +1926,7 @@ static int wil_rf_sector_get_cfg(struct wiphy *wiphy,
 		return -EOPNOTSUPP;
 
 	rc = nla_parse(tb, QCA_ATTR_DMG_RF_SECTOR_MAX, data, data_len,
-		       wil_rf_sector_policy);
+		       wil_rf_sector_policy, NULL);
 	if (rc) {
 		wil_err(wil, "Invalid rf sector ATTR\n");
 		return rc;
@@ -2059,8 +1980,9 @@ static int wil_rf_sector_get_cfg(struct wiphy *wiphy,
 	if (!msg)
 		return -ENOMEM;
 
-	if (nla_put_u64(msg, QCA_ATTR_TSF,
-			le64_to_cpu(reply.evt.tsf)))
+	if (nla_put_u64_64bit(msg, QCA_ATTR_TSF,
+			      le64_to_cpu(reply.evt.tsf),
+			      QCA_ATTR_PAD))
 		goto nla_put_failure;
 
 	nl_cfgs = nla_nest_start(msg, QCA_ATTR_DMG_RF_SECTOR_CFG);
@@ -2122,7 +2044,7 @@ static int wil_rf_sector_set_cfg(struct wiphy *wiphy,
 		return -EOPNOTSUPP;
 
 	rc = nla_parse(tb, QCA_ATTR_DMG_RF_SECTOR_MAX, data, data_len,
-		       wil_rf_sector_policy);
+		       wil_rf_sector_policy, NULL);
 	if (rc) {
 		wil_err(wil, "Invalid rf sector ATTR\n");
 		return rc;
@@ -2155,7 +2077,8 @@ static int wil_rf_sector_set_cfg(struct wiphy *wiphy,
 	nla_for_each_nested(nl_cfg, tb[QCA_ATTR_DMG_RF_SECTOR_CFG],
 			    tmp) {
 		rc = nla_parse_nested(tb2, QCA_ATTR_DMG_RF_SECTOR_CFG_MAX,
-				      nl_cfg, wil_rf_sector_cfg_policy);
+				      nl_cfg, wil_rf_sector_cfg_policy,
+				      NULL);
 		if (rc) {
 			wil_err(wil, "invalid sector cfg\n");
 			return -EINVAL;
@@ -2226,7 +2149,7 @@ static int wil_rf_sector_get_selected(struct wiphy *wiphy,
 		return -EOPNOTSUPP;
 
 	rc = nla_parse(tb, QCA_ATTR_DMG_RF_SECTOR_MAX, data, data_len,
-		       wil_rf_sector_policy);
+		       wil_rf_sector_policy, NULL);
 	if (rc) {
 		wil_err(wil, "Invalid rf sector ATTR\n");
 		return rc;
@@ -2278,8 +2201,9 @@ static int wil_rf_sector_get_selected(struct wiphy *wiphy,
 	if (!msg)
 		return -ENOMEM;
 
-	if (nla_put_u64(msg, QCA_ATTR_TSF,
-			le64_to_cpu(reply.evt.tsf)) ||
+	if (nla_put_u64_64bit(msg, QCA_ATTR_TSF,
+			      le64_to_cpu(reply.evt.tsf),
+			      QCA_ATTR_PAD) ||
 	    nla_put_u16(msg, QCA_ATTR_DMG_RF_SECTOR_INDEX,
 			le16_to_cpu(reply.evt.sector_idx)))
 		goto nla_put_failure;
@@ -2332,7 +2256,7 @@ static int wil_rf_sector_set_selected(struct wiphy *wiphy,
 		return -EOPNOTSUPP;
 
 	rc = nla_parse(tb, QCA_ATTR_DMG_RF_SECTOR_MAX, data, data_len,
-		       wil_rf_sector_policy);
+		       wil_rf_sector_policy, NULL);
 	if (rc) {
 		wil_err(wil, "Invalid rf sector ATTR\n");
 		return rc;

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _LINUX_SHRINKER_H
 #define _LINUX_SHRINKER_H
 
@@ -17,6 +18,13 @@ struct shrink_control {
 	 * to modify.
 	 */
 	unsigned long nr_to_scan;
+
+	/*
+	 * How many objects did scan_objects process?
+	 * This defaults to nr_to_scan before every call, but the callee
+	 * should track its actual progress.
+	 */
+	unsigned long nr_scanned;
 
 	/* current node being shrunk (for NUMA aware shrinkers) */
 	int nid;
@@ -66,7 +74,6 @@ struct shrinker {
 /* Flags */
 #define SHRINKER_NUMA_AWARE	(1 << 0)
 #define SHRINKER_MEMCG_AWARE	(1 << 1)
-#define SHRINKER_LMK		(1 << 2)
 
 extern int register_shrinker(struct shrinker *);
 extern void unregister_shrinker(struct shrinker *);

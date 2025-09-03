@@ -2,7 +2,7 @@
  * Copyright (C) 2013-2014 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
  *
- * Copyright (c) 2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014,2017 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published by
@@ -17,6 +17,7 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <linux/pm_opp.h>
 #include "adreno_gpu.h"
 
 #define ANY_ID 0xff
@@ -24,10 +25,6 @@
 bool hang_debug = false;
 MODULE_PARM_DESC(hang_debug, "Dump registers when hang is detected (can be slow!)");
 module_param_named(hang_debug, hang_debug, bool, 0600);
-
-struct msm_gpu *a3xx_gpu_init(struct drm_device *dev);
-struct msm_gpu *a4xx_gpu_init(struct drm_device *dev);
-struct msm_gpu *a5xx_gpu_init(struct drm_device *dev);
 
 static const struct adreno_info gpulist[] = {
 	{
@@ -79,21 +76,17 @@ static const struct adreno_info gpulist[] = {
 		.gmem  = (SZ_1M + SZ_512K),
 		.init  = a4xx_gpu_init,
 	}, {
-		.rev = ADRENO_REV(5, 3, 0, ANY_ID),
+		.rev = ADRENO_REV(5, 3, 0, 2),
 		.revn = 530,
 		.name = "A530",
 		.pm4fw = "a530_pm4.fw",
 		.pfpfw = "a530_pfp.fw",
 		.gmem = SZ_1M,
+		.quirks = ADRENO_QUIRK_TWO_PASS_USE_WFI |
+			ADRENO_QUIRK_FAULT_DETECT_MASK,
 		.init = a5xx_gpu_init,
-	}, {
-		.rev = ADRENO_REV(5, 4, 0, ANY_ID),
-		.revn = 540,
-		.name = "A540",
-		.pm4fw = "a530_pm4.fw",
-		.pfpfw = "a530_pfp.fw",
-		.gmem = SZ_1M,
-		.init = a5xx_gpu_init,
+		.gpmufw = "a530v3_gpmu.fw2",
+		.zapfw = "a530_zap.mdt",
 	},
 };
 
@@ -166,13 +159,12 @@ struct msm_gpu *adreno_load_gpu(struct drm_device *dev)
 		int ret;
 
 		pm_runtime_get_sync(&pdev->dev);
+		mutex_lock(&dev->struct_mutex);
 		ret = msm_gpu_hw_init(gpu);
-		pm_runtime_put_sync_autosuspend(&pdev->dev);
+		mutex_unlock(&dev->struct_mutex);
+		pm_runtime_put_sync(&pdev->dev);
 		if (ret) {
 			dev_err(dev->dev, "gpu hw init failed: %d\n", ret);
-			mutex_lock(&dev->struct_mutex);
-			gpu->funcs->pm_suspend(gpu);
-			mutex_unlock(&dev->struct_mutex);
 			gpu->funcs->destroy(gpu);
 			gpu = NULL;
 		}
@@ -188,19 +180,113 @@ static void set_gpu_pdev(struct drm_device *dev,
 	priv->gpu_pdev = pdev;
 }
 
+static int find_chipid(struct device *dev, u32 *chipid)
+{
+	struct device_node *node = dev->of_node;
+	const char *compat;
+	int ret;
+
+	/* first search the compat strings for qcom,adreno-XYZ.W: */
+	ret = of_property_read_string_index(node, "compatible", 0, &compat);
+	if (ret == 0) {
+		unsigned rev, patch;
+
+		if (sscanf(compat, "qcom,adreno-%u.%u", &rev, &patch) == 2) {
+			*chipid = 0;
+			*chipid |= (rev / 100) << 24;  /* core */
+			rev %= 100;
+			*chipid |= (rev / 10) << 16;   /* major */
+			rev %= 10;
+			*chipid |= rev << 8;           /* minor */
+			*chipid |= patch;
+
+			return 0;
+		}
+	}
+
+	/* and if that fails, fall back to legacy "qcom,chipid" property: */
+	ret = of_property_read_u32(node, "qcom,chipid", chipid);
+	if (ret)
+		return ret;
+
+	dev_warn(dev, "Using legacy qcom,chipid binding!\n");
+	dev_warn(dev, "Use compatible qcom,adreno-%u%u%u.%u instead.\n",
+			(*chipid >> 24) & 0xff, (*chipid >> 16) & 0xff,
+			(*chipid >> 8) & 0xff, *chipid & 0xff);
+
+	return 0;
+}
+
+/* Get legacy powerlevels from qcom,gpu-pwrlevels and populate the opp table */
+static int adreno_get_legacy_pwrlevels(struct device *dev)
+{
+	struct device_node *child, *node;
+	int ret;
+
+	node = of_get_compatible_child(dev->of_node, "qcom,gpu-pwrlevels");
+	if (!node) {
+		dev_err(dev, "Could not find the GPU powerlevels\n");
+		return -ENXIO;
+	}
+
+	for_each_child_of_node(node, child) {
+		unsigned int val;
+
+		ret = of_property_read_u32(child, "qcom,gpu-freq", &val);
+		if (ret)
+			continue;
+
+		/*
+		 * Skip the intentionally bogus clock value found at the bottom
+		 * of most legacy frequency tables
+		 */
+		if (val != 27000000)
+			dev_pm_opp_add(dev, val, 0);
+	}
+
+	of_node_put(node);
+
+	return 0;
+}
+
+static int adreno_get_pwrlevels(struct device *dev,
+		struct adreno_platform_config *config)
+{
+	unsigned long freq = ULONG_MAX;
+	struct dev_pm_opp *opp;
+	int ret;
+
+	/* You down with OPP? */
+	if (!of_find_property(dev->of_node, "operating-points-v2", NULL))
+		ret = adreno_get_legacy_pwrlevels(dev);
+	else
+		ret = dev_pm_opp_of_add_table(dev);
+
+	if (ret)
+		return ret;
+
+	/* Find the fastest defined rate */
+	opp = dev_pm_opp_find_freq_floor(dev, &freq);
+	if (!IS_ERR(opp))
+		config->fast_rate = dev_pm_opp_get_freq(opp);
+
+	if (!config->fast_rate) {
+		DRM_DEV_INFO(dev,
+			"Could not find clock rate. Using default\n");
+		/* Pick a suitably safe clock speed for any target */
+		config->fast_rate = 200000000;
+	}
+
+	return 0;
+}
+
 static int adreno_bind(struct device *dev, struct device *master, void *data)
 {
 	static struct adreno_platform_config config = {};
-	uint32_t val = 0;
+	u32 val;
 	int ret;
 
-	/*
-	 * Read the chip ID from the device tree at bind time - we use this
-	 * information to load the correct functions. All the rest of the
-	 * (extensive) device tree probing should happen in the GPU specific
-	 * code
-	 */
-	ret = of_property_read_u32(dev->of_node, "qcom,chipid", &val);
+	ret = find_chipid(dev, &val);
 	if (ret) {
 		dev_err(dev, "could not find chipid: %d\n", ret);
 		return ret;
@@ -208,6 +294,13 @@ static int adreno_bind(struct device *dev, struct device *master, void *data)
 
 	config.rev = ADRENO_REV((val >> 24) & 0xff,
 			(val >> 16) & 0xff, (val >> 8) & 0xff, val & 0xff);
+
+	/* find clock rates: */
+	config.fast_rate = 0;
+
+	ret = adreno_get_pwrlevels(dev, &config);
+	if (ret)
+		return ret;
 
 	dev->platform_data = &config;
 	set_gpu_pdev(dev_get_drvdata(master), to_platform_device(dev));
@@ -237,6 +330,7 @@ static int adreno_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id dt_match[] = {
+	{ .compatible = "qcom,adreno" },
 	{ .compatible = "qcom,adreno-3xx" },
 	/* for backwards compat w/ downstream kgsl DT files: */
 	{ .compatible = "qcom,kgsl-3d0" },

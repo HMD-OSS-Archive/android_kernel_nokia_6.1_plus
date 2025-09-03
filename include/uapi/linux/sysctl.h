@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  * sysctl.h: General linux system control interface
  *
@@ -25,8 +26,6 @@
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/compiler.h>
-
-struct completion;
 
 #define CTL_MAXNAME 10		/* how many path components do we allow in a
 				   call to sysctl?   In other words, what is
@@ -154,7 +153,6 @@ enum
 	KERN_NMI_WATCHDOG=75, /* int: enable/disable nmi watchdog */
 	KERN_PANIC_ON_NMI=76, /* int: whether we will panic on an unrecovered */
 	KERN_PANIC_ON_WARN=77, /* int: call panic() in WARN() functions */
-	KERN_COLD_BOOT = 78, /* int: identify if system cold booted */
 };
 
 
@@ -483,7 +481,6 @@ enum
 	NET_IPV4_CONF_PROMOTE_SECONDARIES=20,
 	NET_IPV4_CONF_ARP_ACCEPT=21,
 	NET_IPV4_CONF_ARP_NOTIFY=22,
-	NET_IPV4_CONF_NF_IPV4_DEFRAG_SKIP = 23,
 };
 
 /* /proc/sys/net/ipv4/netfilter */

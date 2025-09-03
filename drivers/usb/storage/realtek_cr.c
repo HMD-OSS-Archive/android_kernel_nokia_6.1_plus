@@ -1,4 +1,5 @@
-/* Driver for Realtek RTS51xx USB card reader
+/*
+ * Driver for Realtek RTS51xx USB card reader
  *
  * Copyright(c) 2009 Realtek Semiconductor Corp. All rights reserved.
  *
@@ -46,11 +47,10 @@
 MODULE_DESCRIPTION("Driver for Realtek USB Card Reader");
 MODULE_AUTHOR("wwang <wei_wang@realsil.com.cn>");
 MODULE_LICENSE("GPL");
-MODULE_VERSION("1.03");
 
 static int auto_delink_en = 1;
 module_param(auto_delink_en, int, S_IRUGO | S_IWUSR);
-MODULE_PARM_DESC(auto_delink_en, "auto delink mode (0=firmware, 1=software [default])");
+MODULE_PARM_DESC(auto_delink_en, "enable auto delink");
 
 #ifdef CONFIG_REALTEK_AUTOPM
 static int ss_en = 1;
@@ -267,8 +267,10 @@ static int rts51x_bulk_transport(struct us_data *us, u8 lun,
 	if (bcs->Tag != us->tag)
 		return USB_STOR_TRANSPORT_ERROR;
 
-	/* try to compute the actual residue, based on how much data
-	 * was really transferred and what the device tells us */
+	/*
+	 * try to compute the actual residue, based on how much data
+	 * was really transferred and what the device tells us
+	 */
 	if (residue)
 		residue = residue < buf_len ? residue : buf_len;
 
@@ -286,7 +288,8 @@ static int rts51x_bulk_transport(struct us_data *us, u8 lun,
 		return USB_STOR_TRANSPORT_FAILED;
 
 	case US_BULK_STAT_PHASE:
-		/* phase error -- note that a transport reset will be
+		/*
+		 * phase error -- note that a transport reset will be
 		 * invoked by the invoke_transport() function
 		 */
 		return USB_STOR_TRANSPORT_ERROR;
@@ -1006,15 +1009,12 @@ static int init_realtek_cr(struct us_data *us)
 			goto INIT_FAIL;
 	}
 
-	if (CHECK_PID(chip, 0x0138) || CHECK_PID(chip, 0x0158) ||
-	    CHECK_PID(chip, 0x0159)) {
-		if (CHECK_FW_VER(chip, 0x5888) || CHECK_FW_VER(chip, 0x5889) ||
-				CHECK_FW_VER(chip, 0x5901))
+	if (CHECK_FW_VER(chip, 0x5888) || CHECK_FW_VER(chip, 0x5889) ||
+	    CHECK_FW_VER(chip, 0x5901))
+		SET_AUTO_DELINK(chip);
+	if (STATUS_LEN(chip) == 16) {
+		if (SUPPORT_AUTO_DELINK(chip))
 			SET_AUTO_DELINK(chip);
-		if (STATUS_LEN(chip) == 16) {
-			if (SUPPORT_AUTO_DELINK(chip))
-				SET_AUTO_DELINK(chip);
-		}
 	}
 #ifdef CONFIG_REALTEK_AUTOPM
 	if (ss_en)

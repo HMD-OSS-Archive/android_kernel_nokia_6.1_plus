@@ -395,20 +395,20 @@ try_again:
 	req->complete = f_hidg_req_complete;
 	req->context  = hidg;
 
+	spin_unlock_irqrestore(&hidg->write_spinlock, flags);
+
 	status = usb_ep_queue(hidg->in_ep, req, GFP_ATOMIC);
 	if (status < 0) {
 		ERROR(hidg->func.config->cdev,
 			"usb_ep_queue error on int endpoint %zd\n", status);
-		goto release_write_pending_unlocked;
+		goto release_write_pending;
 	} else {
 		status = count;
 	}
-	spin_unlock_irqrestore(&hidg->write_spinlock, flags);
 
 	return status;
 release_write_pending:
 	spin_lock_irqsave(&hidg->write_spinlock, flags);
-release_write_pending_unlocked:
 	hidg->write_pending = 0;
 	spin_unlock_irqrestore(&hidg->write_spinlock, flags);
 
@@ -812,7 +812,7 @@ static int hidg_bind(struct usb_configuration *c, struct usb_function *f)
 		hidg_fs_out_ep_desc.bEndpointAddress;
 
 	status = usb_assign_descriptors(f, hidg_fs_descriptors,
-			hidg_hs_descriptors, hidg_ss_descriptors);
+			hidg_hs_descriptors, hidg_ss_descriptors, NULL);
 	if (status)
 		goto fail;
 
@@ -1086,6 +1086,23 @@ static void hidg_unbind(struct usb_configuration *c, struct usb_function *f)
 	usb_free_all_descriptors(f);
 }
 
+/*-------------------------------------------------------------------------*/
+/*                             usb_configuration                           */
+static struct hidg_func_descriptor hid_data = {
+	.subclass = 0,      /* No subclass */
+	.protocol = 0,      /* Mouse Protocol */
+	.report_length = 4,
+	.report_desc_length = 7,
+	.report_desc = {
+		0x05, 0x01, /* USAGE_PAGE (Generic Desktop)     */
+		0x09, 0x00, /* USAGE (None)             */
+		0xa1, 0x01, /* COLLECTION (Application)     */
+		0xc0        /* END_COLLECTION           */
+	}
+};
+/*-------------------------------------------------------------------------*/
+
+
 static struct usb_function *hidg_alloc(struct usb_function_instance *fi)
 {
 	struct f_hidg *hidg;
@@ -1117,6 +1134,21 @@ static struct usb_function *hidg_alloc(struct usb_function_instance *fi)
 		}
 	}
 
+	/* HACK, replace content, duplicate code from above */
+	hidg->bInterfaceSubClass = hid_data.subclass;
+	hidg->bInterfaceProtocol = hid_data.protocol;
+	hidg->report_length = hid_data.report_length;
+	hidg->report_desc_length = hid_data.report_desc_length;
+	hidg->report_desc = kmemdup(hid_data.report_desc,
+			hid_data.report_desc_length,
+			GFP_KERNEL);
+	if (!hidg->report_desc) {
+		kfree(hidg);
+		mutex_unlock(&opts->lock);
+		return ERR_PTR(-ENOMEM);
+	}
+
+
 	mutex_unlock(&opts->lock);
 
 	hidg->func.name    = "hid";
@@ -1134,20 +1166,6 @@ static struct usb_function *hidg_alloc(struct usb_function_instance *fi)
 }
 
 DECLARE_USB_FUNCTION_INIT(hid, hidg_alloc_inst, hidg_alloc);
-
-static int __init afunc_init(void)
-{
-	return usb_function_register(&hidusb_func);
-}
-
-static void __exit afunc_exit(void)
-{
-	usb_function_unregister(&hidusb_func);
-}
-
-module_init(afunc_init);
-module_exit(afunc_exit);
-
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Fabien Chouteau");
 

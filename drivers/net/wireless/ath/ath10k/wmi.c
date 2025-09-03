@@ -28,6 +28,7 @@
 #include "wmi-ops.h"
 #include "p2p.h"
 #include "hw.h"
+#include "hif.h"
 
 #define ATH10K_WMI_BARRIER_ECHO_ID 0xBA991E9
 #define ATH10K_WMI_BARRIER_TIMEOUT_HZ (3 * HZ)
@@ -650,8 +651,6 @@ static struct wmi_cmd_map wmi_10_4_cmd_map = {
 	.gpio_output_cmdid = WMI_10_4_GPIO_OUTPUT_CMDID,
 	.pdev_get_temperature_cmdid = WMI_10_4_PDEV_GET_TEMPERATURE_CMDID,
 	.vdev_set_wmm_params_cmdid = WMI_CMD_UNSUPPORTED,
-	.tdls_set_state_cmdid = WMI_CMD_UNSUPPORTED,
-	.tdls_peer_update_cmdid = WMI_CMD_UNSUPPORTED,
 	.adaptive_qcs_cmdid = WMI_CMD_UNSUPPORTED,
 	.scan_update_request_cmdid = WMI_10_4_SCAN_UPDATE_REQUEST_CMDID,
 	.vdev_standby_response_cmdid = WMI_10_4_VDEV_STANDBY_RESPONSE_CMDID,
@@ -710,6 +709,33 @@ static struct wmi_cmd_map wmi_10_4_cmd_map = {
 	.pdev_bss_chan_info_request_cmdid =
 			WMI_10_4_PDEV_BSS_CHAN_INFO_REQUEST_CMDID,
 	.ext_resource_cfg_cmdid = WMI_10_4_EXT_RESOURCE_CFG_CMDID,
+	.vdev_set_ie_cmdid = WMI_10_4_VDEV_SET_IE_CMDID,
+	.set_lteu_config_cmdid = WMI_10_4_SET_LTEU_CONFIG_CMDID,
+	.atf_ssid_grouping_request_cmdid =
+			WMI_10_4_ATF_SSID_GROUPING_REQUEST_CMDID,
+	.peer_atf_ext_request_cmdid = WMI_10_4_PEER_ATF_EXT_REQUEST_CMDID,
+	.set_periodic_channel_stats_cfg_cmdid =
+			WMI_10_4_SET_PERIODIC_CHANNEL_STATS_CONFIG,
+	.peer_bwf_request_cmdid = WMI_10_4_PEER_BWF_REQUEST_CMDID,
+	.btcoex_cfg_cmdid = WMI_10_4_BTCOEX_CFG_CMDID,
+	.peer_tx_mu_txmit_count_cmdid = WMI_10_4_PEER_TX_MU_TXMIT_COUNT_CMDID,
+	.peer_tx_mu_txmit_rstcnt_cmdid = WMI_10_4_PEER_TX_MU_TXMIT_RSTCNT_CMDID,
+	.peer_gid_userpos_list_cmdid = WMI_10_4_PEER_GID_USERPOS_LIST_CMDID,
+	.pdev_check_cal_version_cmdid = WMI_10_4_PDEV_CHECK_CAL_VERSION_CMDID,
+	.coex_version_cfg_cmid = WMI_10_4_COEX_VERSION_CFG_CMID,
+	.pdev_get_rx_filter_cmdid = WMI_10_4_PDEV_GET_RX_FILTER_CMDID,
+	.pdev_extended_nss_cfg_cmdid = WMI_10_4_PDEV_EXTENDED_NSS_CFG_CMDID,
+	.vdev_set_scan_nac_rssi_cmdid = WMI_10_4_VDEV_SET_SCAN_NAC_RSSI_CMDID,
+	.prog_gpio_band_select_cmdid = WMI_10_4_PROG_GPIO_BAND_SELECT_CMDID,
+	.config_smart_logging_cmdid = WMI_10_4_CONFIG_SMART_LOGGING_CMDID,
+	.debug_fatal_condition_cmdid = WMI_10_4_DEBUG_FATAL_CONDITION_CMDID,
+	.get_tsf_timer_cmdid = WMI_10_4_GET_TSF_TIMER_CMDID,
+	.pdev_get_tpc_table_cmdid = WMI_10_4_PDEV_GET_TPC_TABLE_CMDID,
+	.vdev_sifs_trigger_time_cmdid = WMI_10_4_VDEV_SIFS_TRIGGER_TIME_CMDID,
+	.pdev_wds_entry_list_cmdid = WMI_10_4_PDEV_WDS_ENTRY_LIST_CMDID,
+	.tdls_set_state_cmdid = WMI_10_4_TDLS_SET_STATE_CMDID,
+	.tdls_peer_update_cmdid = WMI_10_4_TDLS_PEER_UPDATE_CMDID,
+	.tdls_set_offchan_mode_cmdid = WMI_10_4_TDLS_SET_OFFCHAN_MODE_CMDID,
 };
 
 /* MAIN WMI VDEV param map */
@@ -785,7 +811,6 @@ static struct wmi_vdev_param_map wmi_vdev_param_map = {
 	.meru_vc = WMI_VDEV_PARAM_UNSUPPORTED,
 	.rx_decap_type = WMI_VDEV_PARAM_UNSUPPORTED,
 	.bw_nss_ratemask = WMI_VDEV_PARAM_UNSUPPORTED,
-	.set_tsf = WMI_VDEV_PARAM_UNSUPPORTED,
 };
 
 /* 10.X WMI VDEV param map */
@@ -861,7 +886,6 @@ static struct wmi_vdev_param_map wmi_10x_vdev_param_map = {
 	.meru_vc = WMI_VDEV_PARAM_UNSUPPORTED,
 	.rx_decap_type = WMI_VDEV_PARAM_UNSUPPORTED,
 	.bw_nss_ratemask = WMI_VDEV_PARAM_UNSUPPORTED,
-	.set_tsf = WMI_VDEV_PARAM_UNSUPPORTED,
 };
 
 static struct wmi_vdev_param_map wmi_10_2_4_vdev_param_map = {
@@ -936,7 +960,6 @@ static struct wmi_vdev_param_map wmi_10_2_4_vdev_param_map = {
 	.meru_vc = WMI_VDEV_PARAM_UNSUPPORTED,
 	.rx_decap_type = WMI_VDEV_PARAM_UNSUPPORTED,
 	.bw_nss_ratemask = WMI_VDEV_PARAM_UNSUPPORTED,
-	.set_tsf = WMI_10X_VDEV_PARAM_TSF_INCREMENT,
 };
 
 static struct wmi_vdev_param_map wmi_10_4_vdev_param_map = {
@@ -1012,7 +1035,8 @@ static struct wmi_vdev_param_map wmi_10_4_vdev_param_map = {
 	.meru_vc = WMI_10_4_VDEV_PARAM_MERU_VC,
 	.rx_decap_type = WMI_10_4_VDEV_PARAM_RX_DECAP_TYPE,
 	.bw_nss_ratemask = WMI_10_4_VDEV_PARAM_BW_NSS_RATEMASK,
-	.set_tsf = WMI_10_4_VDEV_PARAM_TSF_INCREMENT,
+	.inc_tsf = WMI_10_4_VDEV_PARAM_TSF_INCREMENT,
+	.dec_tsf = WMI_10_4_VDEV_PARAM_TSF_DECREMENT,
 };
 
 static struct wmi_pdev_param_map wmi_pdev_param_map = {
@@ -1576,6 +1600,7 @@ static const struct wmi_peer_flags_map wmi_peer_flags_map = {
 	.bw80 = WMI_PEER_80MHZ,
 	.vht_2g = WMI_PEER_VHT_2G,
 	.pmf = WMI_PEER_PMF,
+	.bw160 = WMI_PEER_160MHZ,
 };
 
 static const struct wmi_peer_flags_map wmi_10x_peer_flags_map = {
@@ -1593,6 +1618,7 @@ static const struct wmi_peer_flags_map wmi_10x_peer_flags_map = {
 	.spatial_mux = WMI_10X_PEER_SPATIAL_MUX,
 	.vht = WMI_10X_PEER_VHT,
 	.bw80 = WMI_10X_PEER_80MHZ,
+	.bw160 = WMI_10X_PEER_160MHZ,
 };
 
 static const struct wmi_peer_flags_map wmi_10_2_peer_flags_map = {
@@ -1612,6 +1638,7 @@ static const struct wmi_peer_flags_map wmi_10_2_peer_flags_map = {
 	.bw80 = WMI_10_2_PEER_80MHZ,
 	.vht_2g = WMI_10_2_PEER_VHT_2G,
 	.pmf = WMI_10_2_PEER_PMF,
+	.bw160 = WMI_10_2_PEER_160MHZ,
 };
 
 void ath10k_wmi_put_wmi_channel(struct wmi_channel *ch,
@@ -1636,7 +1663,10 @@ void ath10k_wmi_put_wmi_channel(struct wmi_channel *ch,
 
 	ch->mhz = __cpu_to_le32(arg->freq);
 	ch->band_center_freq1 = __cpu_to_le32(arg->band_center_freq1);
-	ch->band_center_freq2 = 0;
+	if (arg->mode == MODE_11AC_VHT80_80)
+		ch->band_center_freq2 = __cpu_to_le32(arg->band_center_freq2);
+	else
+		ch->band_center_freq2 = 0;
 	ch->min_power = arg->min_power;
 	ch->max_power = arg->max_power;
 	ch->reg_power = arg->max_reg_power;
@@ -1774,7 +1804,7 @@ unlock:
 static void ath10k_wmi_tx_beacons_iter(void *data, u8 *mac,
 				       struct ieee80211_vif *vif)
 {
-	struct ath10k_vif *arvif = ath10k_vif_to_arvif(vif);
+	struct ath10k_vif *arvif = (void *)vif->drv_priv;
 
 	ath10k_wmi_tx_beacon_nowait(arvif);
 }
@@ -1798,9 +1828,6 @@ static void ath10k_wmi_op_ep_tx_credits(struct ath10k *ar)
 int ath10k_wmi_cmd_send(struct ath10k *ar, struct sk_buff *skb, u32 cmd_id)
 {
 	int ret = -EOPNOTSUPP;
-
-	if (test_bit(ATH10K_FLAG_CRASH_FLUSH, &ar->dev_flags))
-		return -ESHUTDOWN;
 
 	might_sleep();
 
@@ -2275,77 +2302,6 @@ static bool ath10k_wmi_rx_is_decrypted(struct ath10k *ar,
 	return true;
 }
 
-int ath10k_wmi_tlv_event_peer_delete_resp(struct ath10k *ar,
-					  struct sk_buff *skb)
-{
-	int ret;
-	struct wmi_peer_delete_resp_ev_arg arg = {};
-
-	ret = ath10k_wmi_pull_peer_delete_resp(ar, skb, &arg);
-	if (ret) {
-		ath10k_warn(ar, "failed to parse peer delete resp: %d\n", ret);
-		dev_kfree_skb(skb);
-		return ret;
-	}
-	ath10k_dbg(ar, ATH10K_DBG_WMI, "WMI_TLV_PEER_DELETE_RESP_EVENTID\n");
-	complete(&ar->peer_delete_done);
-
-	return 0;
-}
-
-static int wmi_tlv_process_mgmt_tx_comp(struct ath10k *ar, u32 desc_id,
-					u32 status)
-{
-	struct ath10k_mgmt_tx_pkt_addr *pkt_addr;
-	struct ath10k_wmi *wmi = &ar->wmi;
-	struct ieee80211_tx_info *info;
-	struct sk_buff *msdu;
-	int ret = 0;
-
-	spin_lock_bh(&wmi->mgmt_tx_lock);
-	pkt_addr = idr_find(&wmi->mgmt_pending_tx, desc_id);
-	if (!pkt_addr) {
-		ath10k_warn(ar, "received mgmt tx completion for invalid msdu_id: %d\n",
-			    desc_id);
-		ret = -ENOENT;
-		goto tx_comp_process_done;
-	}
-
-	msdu = pkt_addr->vaddr;
-	dma_unmap_single(ar->dev, pkt_addr->paddr,
-			 msdu->len, DMA_FROM_DEVICE);
-	info = IEEE80211_SKB_CB(msdu);
-	if (!status)
-		info->flags |= IEEE80211_TX_STAT_ACK;
-	else
-		info->flags |= status;
-	ieee80211_tx_status_irqsafe(ar->hw, msdu);
-	ret = 0;
-
-tx_comp_process_done:
-	idr_remove(&wmi->mgmt_pending_tx, desc_id);
-	spin_unlock_bh(&wmi->mgmt_tx_lock);
-
-	return ret;
-}
-
-int ath10k_wmi_tlv_event_mgmt_tx_compl(struct ath10k *ar, struct sk_buff *skb)
-{
-	int ret;
-	struct wmi_tlv_mgmt_tx_compl_ev_arg arg;
-
-	ret = ath10k_wmi_pull_mgmt_tx_compl(ar, skb, &arg);
-	if (ret) {
-		ath10k_warn(ar, "failed to parse mgmt comp event: %d\n", ret);
-		return ret;
-	}
-
-	wmi_tlv_process_mgmt_tx_comp(ar, arg.desc_id, arg.status);
-	ath10k_dbg(ar, ATH10K_DBG_WMI, "WMI_TLV_MGMT_TX_COMPLETION_EVENTID\n");
-
-	return 0;
-}
-
 int ath10k_wmi_event_mgmt_rx(struct ath10k *ar, struct sk_buff *skb)
 {
 	struct wmi_mgmt_rx_ev_arg arg = {};
@@ -2400,9 +2356,9 @@ int ath10k_wmi_event_mgmt_rx(struct ath10k *ar, struct sk_buff *skb)
 	 * of mgmt rx.
 	 */
 	if (channel >= 1 && channel <= 14) {
-		status->band = IEEE80211_BAND_2GHZ;
-	} else if (channel >= 36 && channel <= 165) {
-		status->band = IEEE80211_BAND_5GHZ;
+		status->band = NL80211_BAND_2GHZ;
+	} else if (channel >= 36 && channel <= 169) {
+		status->band = NL80211_BAND_5GHZ;
 	} else {
 		/* Shouldn't happen unless list of advertised channels to
 		 * mac80211 has been changed.
@@ -2412,7 +2368,7 @@ int ath10k_wmi_event_mgmt_rx(struct ath10k *ar, struct sk_buff *skb)
 		return 0;
 	}
 
-	if (phy_mode == MODE_11B && status->band == IEEE80211_BAND_5GHZ)
+	if (phy_mode == MODE_11B && status->band == NL80211_BAND_5GHZ)
 		ath10k_dbg(ar, ATH10K_DBG_MGMT, "wmi mgmt rx 11b (CCK) on 5GHz\n");
 
 	sband = &ar->mac.sbands[status->band];
@@ -2467,7 +2423,7 @@ static int freq_to_idx(struct ath10k *ar, int freq)
 	struct ieee80211_supported_band *sband;
 	int band, ch, idx = 0;
 
-	for (band = IEEE80211_BAND_2GHZ; band < IEEE80211_NUM_BANDS; band++) {
+	for (band = NL80211_BAND_2GHZ; band < NUM_NL80211_BANDS; band++) {
 		sband = ar->hw->wiphy->bands[band];
 		if (!sband)
 			continue;
@@ -2523,31 +2479,6 @@ static int ath10k_wmi_10_4_op_pull_ch_info_ev(struct ath10k *ar,
 	return 0;
 }
 
-static void wlan_fill_survey_result(struct ath10k *ar,
-				    struct survey_info *survey,
-				    struct wmi_ch_info_ev_arg arg)
-{
-	u64 clock_freq;
-
-	if (!arg.mac_clk_mhz || !survey)
-		return;
-
-	clock_freq = arg.mac_clk_mhz * 1000;
-
-	memset(survey, 0, sizeof(*survey));
-
-	survey->noise = __le32_to_cpu(arg.noise_floor);
-	survey->time = __le32_to_cpu(arg.cycle_count) / clock_freq;
-	survey->time_busy = __le32_to_cpu(arg.rx_clear_count) / clock_freq;
-	survey->time_tx = __le32_to_cpu(arg.rx_clear_count) / clock_freq;
-
-	survey->filled = SURVEY_INFO_NOISE_DBM;
-	ar->ch_info_can_report_survey = true;
-
-	survey->filled |= (SURVEY_INFO_TIME | SURVEY_INFO_TIME_BUSY |
-			   SURVEY_INFO_TIME_TX);
-}
-
 void ath10k_wmi_event_chan_info(struct ath10k *ar, struct sk_buff *skb)
 {
 	struct wmi_ch_info_ev_arg arg = {};
@@ -2589,12 +2520,6 @@ void ath10k_wmi_event_chan_info(struct ath10k *ar, struct sk_buff *skb)
 	if (idx >= ARRAY_SIZE(ar->survey)) {
 		ath10k_warn(ar, "chan info: invalid frequency %d (idx %d out of bounds)\n",
 			    freq, idx);
-		goto exit;
-	}
-
-	if (QCA_REV_WCN3990(ar)) {
-		survey = &ar->survey[idx];
-		wlan_fill_survey_result(ar, survey, arg);
 		goto exit;
 	}
 
@@ -3228,12 +3153,6 @@ void ath10k_wmi_event_vdev_stopped(struct ath10k *ar, struct sk_buff *skb)
 	complete(&ar->vdev_setup_done);
 }
 
-void ath10k_wmi_event_vdev_delete_resp(struct ath10k *ar, struct sk_buff *skb)
-{
-	ath10k_dbg(ar, ATH10K_DBG_WMI, "WMI_VDEV_DELETE_RESP_EVENTID\n");
-	complete(&ar->vdev_delete_done);
-}
-
 static int
 ath10k_wmi_op_pull_peer_kick_ev(struct ath10k *ar, struct sk_buff *skb,
 				struct wmi_peer_kick_ev_arg *arg)
@@ -3322,7 +3241,8 @@ static void ath10k_wmi_update_tim(struct ath10k *ar,
 	tim_len = tim_info->tim_len ? __le32_to_cpu(tim_info->tim_len) : 1;
 
 	/* if next SWBA has no tim_changed the tim_bitmap is garbage.
-	 * we must copy the bitmap upon change and reuse it later */
+	 * we must copy the bitmap upon change and reuse it later
+	 */
 	if (__le32_to_cpu(tim_info->tim_changed)) {
 		int i;
 
@@ -3415,9 +3335,8 @@ static void ath10k_wmi_update_noa(struct ath10k *ar, struct ath10k_vif *arvif,
 
 	if (arvif->u.ap.noa_data)
 		if (!pskb_expand_head(bcn, 0, arvif->u.ap.noa_len, GFP_ATOMIC))
-			memcpy(skb_put(bcn, arvif->u.ap.noa_len),
-			       arvif->u.ap.noa_data,
-			       arvif->u.ap.noa_len);
+			skb_put_data(bcn, arvif->u.ap.noa_data,
+				     arvif->u.ap.noa_len);
 }
 
 static int ath10k_wmi_op_pull_swba_ev(struct ath10k *ar, struct sk_buff *skb,
@@ -3641,7 +3560,8 @@ void ath10k_wmi_event_host_swba(struct ath10k *ar, struct sk_buff *skb)
 		 * before telling mac80211 to decrement CSA counter
 		 *
 		 * Once CSA counter is completed stop sending beacons until
-		 * actual channel switch is done */
+		 * actual channel switch is done
+		 */
 		if (arvif->vif->csa_active &&
 		    ieee80211_csa_is_complete(arvif->vif)) {
 			ieee80211_csa_finish(arvif->vif);
@@ -3755,6 +3675,11 @@ static void ath10k_dfs_radar_report(struct ath10k *ar,
 
 	spin_lock_bh(&ar->data_lock);
 	ch = ar->rx_channel;
+
+	/* fetch target operating channel during channel change */
+	if (!ch)
+		ch = ar->tgt_oper_chan;
+
 	spin_unlock_bh(&ar->data_lock);
 
 	if (!ch) {
@@ -3798,7 +3723,8 @@ radar_detected:
 	ATH10K_DFS_STAT_INC(ar, radar_detected);
 
 	/* Control radar events reporting in debugfs file
-	   dfs_block_radar_events */
+	 * dfs_block_radar_events
+	 */
 	if (ar->dfs_block_radar_events) {
 		ath10k_info(ar, "DFS Radar detected, but ignored as requested\n");
 		return;
@@ -4135,20 +4061,19 @@ void ath10k_wmi_event_phyerr(struct ath10k *ar, struct sk_buff *skb)
 
 		left_len -= buf_len;
 
-		if ((phy_err_code == PHY_ERROR_RADAR) ||
-		    (hdr_arg.phy_err_mask0 &
-				WMI_PHY_ERROR_MASK0_RADAR)) {
+		switch (phy_err_code) {
+		case PHY_ERROR_RADAR:
 			ath10k_wmi_event_dfs(ar, &phyerr_arg, tsf);
-		} else if ((phy_err_code ==
-				WMI_PHY_ERROR_MASK0_SPECTRAL_SCAN) ||
-			   (hdr_arg.phy_err_mask0 &
-				WMI_PHY_ERROR_MASK0_SPECTRAL_SCAN)) {
+			break;
+		case PHY_ERROR_SPECTRAL_SCAN:
 			ath10k_wmi_event_spectral_scan(ar, &phyerr_arg, tsf);
-		} else if ((phy_err_code == PHY_ERROR_FALSE_RADAR_EXT) ||
-			   (hdr_arg.phy_err_mask0 &
-				WMI_PHY_ERROR_MASK0_FALSE_RADAR_EXT)) {
+			break;
+		case PHY_ERROR_FALSE_RADAR_EXT:
 			ath10k_wmi_event_dfs(ar, &phyerr_arg, tsf);
 			ath10k_wmi_event_spectral_scan(ar, &phyerr_arg, tsf);
+			break;
+		default:
+			break;
 		}
 
 		phyerr = phyerr + phyerr_arg.hdr_len + buf_len;
@@ -4274,7 +4199,6 @@ void ath10k_wmi_event_wow_wakeup_host(struct ath10k *ar, struct sk_buff *skb)
 		return;
 	}
 
-	ar->wow.wakeup_reason = ev.wake_reason;
 	ath10k_dbg(ar, ATH10K_DBG_WMI, "wow wakeup host reason %s\n",
 		   wow_reason(ev.wake_reason));
 }
@@ -4588,31 +4512,17 @@ static int ath10k_wmi_alloc_chunk(struct ath10k *ar, u32 req_id,
 				  u32 num_units, u32 unit_len)
 {
 	dma_addr_t paddr;
-	u32 pool_size = 0;
+	u32 pool_size;
 	int idx = ar->wmi.num_mem_chunks;
-	void *vaddr = NULL;
+	void *vaddr;
 
-	if (ar->wmi.num_mem_chunks == ARRAY_SIZE(ar->wmi.mem_chunks))
+	pool_size = num_units * round_up(unit_len, 4);
+	vaddr = dma_alloc_coherent(ar->dev, pool_size, &paddr, GFP_KERNEL);
+
+	if (!vaddr)
 		return -ENOMEM;
 
-	while (!vaddr && num_units) {
-		pool_size = num_units * round_up(unit_len, 4);
-		if (!pool_size)
-			return -EINVAL;
-
-		vaddr = kzalloc(pool_size, GFP_KERNEL | __GFP_NOWARN);
-		if (!vaddr)
-			num_units /= 2;
-	}
-
-	if (!num_units)
-		return -ENOMEM;
-
-	paddr = dma_map_single(ar->dev, vaddr, pool_size, DMA_TO_DEVICE);
-	if (dma_mapping_error(ar->dev, paddr)) {
-		kfree(vaddr);
-		return -ENOMEM;
-	}
+	memset(vaddr, 0, pool_size);
 
 	ar->wmi.mem_chunks[idx].vaddr = vaddr;
 	ar->wmi.mem_chunks[idx].paddr = paddr;
@@ -4707,6 +4617,8 @@ ath10k_wmi_main_op_pull_svc_rdy_ev(struct ath10k *ar, struct sk_buff *skb,
 	arg->phy_capab = ev->phy_capability;
 	arg->num_rf_chains = ev->num_rf_chains;
 	arg->eeprom_rd = ev->hal_reg_capabilities.eeprom_rd;
+	arg->low_5ghz_chan = ev->hal_reg_capabilities.low_5ghz_chan;
+	arg->high_5ghz_chan = ev->hal_reg_capabilities.high_5ghz_chan;
 	arg->num_mem_reqs = ev->num_mem_reqs;
 	arg->service_map = ev->wmi_service_bitmap;
 	arg->service_map_len = sizeof(ev->wmi_service_bitmap);
@@ -4743,6 +4655,8 @@ ath10k_wmi_10x_op_pull_svc_rdy_ev(struct ath10k *ar, struct sk_buff *skb,
 	arg->phy_capab = ev->phy_capability;
 	arg->num_rf_chains = ev->num_rf_chains;
 	arg->eeprom_rd = ev->hal_reg_capabilities.eeprom_rd;
+	arg->low_5ghz_chan = ev->hal_reg_capabilities.low_5ghz_chan;
+	arg->high_5ghz_chan = ev->hal_reg_capabilities.high_5ghz_chan;
 	arg->num_mem_reqs = ev->num_mem_reqs;
 	arg->service_map = ev->wmi_service_bitmap;
 	arg->service_map_len = sizeof(ev->wmi_service_bitmap);
@@ -4795,7 +4709,9 @@ static void ath10k_wmi_event_service_ready_work(struct work_struct *work)
 	ar->fw_version_build = (__le32_to_cpu(arg.sw_ver1) & 0x0000ffff);
 	ar->phy_capability = __le32_to_cpu(arg.phy_capab);
 	ar->num_rf_chains = __le32_to_cpu(arg.num_rf_chains);
-	ar->ath_common.regulatory.current_rd = __le32_to_cpu(arg.eeprom_rd);
+	ar->hw_eeprom_rd = __le32_to_cpu(arg.eeprom_rd);
+	ar->low_5ghz_chan = __le32_to_cpu(arg.low_5ghz_chan);
+	ar->high_5ghz_chan = __le32_to_cpu(arg.high_5ghz_chan);
 
 	ath10k_dbg_dump(ar, ATH10K_DBG_WMI, NULL, "wmi svc: ",
 			arg.service_map, arg.service_map_len);
@@ -4872,9 +4788,10 @@ static void ath10k_wmi_event_service_ready_work(struct work_struct *work)
 				num_units = ar->max_num_peers + 1;
 		} else if (num_unit_info & NUM_UNITS_IS_NUM_PEERS) {
 			/* number of units to allocate is number of
-			 * peers, 1 extra for self peer on target */
-			/* this needs to be tied, host and target
-			 * can get out of sync */
+			 * peers, 1 extra for self peer on target
+			 * this needs to be tied, host and target
+			 * can get out of sync
+			 */
 			num_units = ar->max_num_peers + 1;
 		} else if (num_unit_info & NUM_UNITS_IS_NUM_VDEVS) {
 			num_units = ar->max_num_vdevs + 1;
@@ -4963,39 +4880,6 @@ static int ath10k_wmi_op_pull_echo_ev(struct ath10k *ar,
 	return 0;
 }
 
-void
-ath10k_generate_mac_addr_auto(struct ath10k *ar, struct wmi_rdy_ev_arg *arg)
-{
-	unsigned int soc_serial_num;
-	u8 bdata_mac_addr[ETH_ALEN];
-	u8 udef_mac_addr[] = {0x00, 0x0A, 0xF5, 0x00, 0x00, 0x00};
-
-	soc_serial_num = socinfo_get_serial_number();
-	if (!soc_serial_num)
-		return;
-
-	if (arg->mac_addr) {
-		ether_addr_copy(ar->base_mac_addr, arg->mac_addr);
-		ether_addr_copy(bdata_mac_addr, arg->mac_addr);
-		soc_serial_num &= 0x00ffffff;
-		bdata_mac_addr[3] = (soc_serial_num >> 16) & 0xff;
-		bdata_mac_addr[4] = (soc_serial_num >> 8) & 0xff;
-		bdata_mac_addr[5] = soc_serial_num & 0xff;
-		ether_addr_copy(ar->mac_addr, bdata_mac_addr);
-	} else {
-		/* If mac address not encoded in wlan board data,
-		 * Auto-generate mac address using device serial
-		 * number and user defined mac address 'udef_mac_addr'.
-		 */
-		udef_mac_addr[3] = (soc_serial_num >> 16) & 0xff;
-		udef_mac_addr[4] = (soc_serial_num >> 8) & 0xff;
-		udef_mac_addr[5] = soc_serial_num & 0xff;
-		ether_addr_copy(ar->base_mac_addr, udef_mac_addr);
-		udef_mac_addr[2] = (soc_serial_num >> 24) & 0xff;
-		ether_addr_copy(ar->mac_addr, udef_mac_addr);
-	}
-}
-
 int ath10k_wmi_event_ready(struct ath10k *ar, struct sk_buff *skb)
 {
 	struct wmi_rdy_ev_arg arg = {};
@@ -5014,11 +4898,7 @@ int ath10k_wmi_event_ready(struct ath10k *ar, struct sk_buff *skb)
 		   arg.mac_addr,
 		   __le32_to_cpu(arg.status));
 
-	if (QCA_REV_WCN3990(ar))
-		ath10k_generate_mac_addr_auto(ar, &arg);
-	else
-		ether_addr_copy(ar->mac_addr, arg.mac_addr);
-
+	ether_addr_copy(ar->mac_addr, arg.mac_addr);
 	complete(&ar->wmi.unified_ready);
 	return 0;
 }
@@ -5087,6 +4967,23 @@ exit:
 	return 0;
 }
 
+static inline void ath10k_wmi_queue_set_coverage_class_work(struct ath10k *ar)
+{
+	if (ar->hw_params.hw_ops->set_coverage_class) {
+		spin_lock_bh(&ar->data_lock);
+
+		/* This call only ensures that the modified coverage class
+		 * persists in case the firmware sets the registers back to
+		 * their default value. So calling it is only necessary if the
+		 * coverage class has a non-zero value.
+		 */
+		if (ar->fw_coverage.coverage_class)
+			queue_work(ar->workqueue, &ar->set_coverage_class_work);
+
+		spin_unlock_bh(&ar->data_lock);
+	}
+}
+
 static void ath10k_wmi_op_rx(struct ath10k *ar, struct sk_buff *skb)
 {
 	struct wmi_cmd_hdr *cmd_hdr;
@@ -5107,6 +5004,7 @@ static void ath10k_wmi_op_rx(struct ath10k *ar, struct sk_buff *skb)
 		return;
 	case WMI_SCAN_EVENTID:
 		ath10k_wmi_event_scan(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_CHAN_INFO_EVENTID:
 		ath10k_wmi_event_chan_info(ar, skb);
@@ -5116,15 +5014,18 @@ static void ath10k_wmi_op_rx(struct ath10k *ar, struct sk_buff *skb)
 		break;
 	case WMI_DEBUG_MESG_EVENTID:
 		ath10k_wmi_event_debug_mesg(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_UPDATE_STATS_EVENTID:
 		ath10k_wmi_event_update_stats(ar, skb);
 		break;
 	case WMI_VDEV_START_RESP_EVENTID:
 		ath10k_wmi_event_vdev_start_resp(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_VDEV_STOPPED_EVENTID:
 		ath10k_wmi_event_vdev_stopped(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_PEER_STA_KICKOUT_EVENTID:
 		ath10k_wmi_event_peer_sta_kickout(ar, skb);
@@ -5140,12 +5041,14 @@ static void ath10k_wmi_op_rx(struct ath10k *ar, struct sk_buff *skb)
 		break;
 	case WMI_ROAM_EVENTID:
 		ath10k_wmi_event_roam(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_PROFILE_MATCH:
 		ath10k_wmi_event_profile_match(ar, skb);
 		break;
 	case WMI_DEBUG_PRINT_EVENTID:
 		ath10k_wmi_event_debug_print(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_PDEV_QVIT_EVENTID:
 		ath10k_wmi_event_pdev_qvit(ar, skb);
@@ -5194,6 +5097,7 @@ static void ath10k_wmi_op_rx(struct ath10k *ar, struct sk_buff *skb)
 		return;
 	case WMI_READY_EVENTID:
 		ath10k_wmi_event_ready(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	default:
 		ath10k_warn(ar, "Unknown eventid: %d\n", id);
@@ -5237,6 +5141,7 @@ static void ath10k_wmi_10_1_op_rx(struct ath10k *ar, struct sk_buff *skb)
 		return;
 	case WMI_10X_SCAN_EVENTID:
 		ath10k_wmi_event_scan(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10X_CHAN_INFO_EVENTID:
 		ath10k_wmi_event_chan_info(ar, skb);
@@ -5246,15 +5151,18 @@ static void ath10k_wmi_10_1_op_rx(struct ath10k *ar, struct sk_buff *skb)
 		break;
 	case WMI_10X_DEBUG_MESG_EVENTID:
 		ath10k_wmi_event_debug_mesg(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10X_UPDATE_STATS_EVENTID:
 		ath10k_wmi_event_update_stats(ar, skb);
 		break;
 	case WMI_10X_VDEV_START_RESP_EVENTID:
 		ath10k_wmi_event_vdev_start_resp(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10X_VDEV_STOPPED_EVENTID:
 		ath10k_wmi_event_vdev_stopped(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10X_PEER_STA_KICKOUT_EVENTID:
 		ath10k_wmi_event_peer_sta_kickout(ar, skb);
@@ -5270,12 +5178,14 @@ static void ath10k_wmi_10_1_op_rx(struct ath10k *ar, struct sk_buff *skb)
 		break;
 	case WMI_10X_ROAM_EVENTID:
 		ath10k_wmi_event_roam(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10X_PROFILE_MATCH:
 		ath10k_wmi_event_profile_match(ar, skb);
 		break;
 	case WMI_10X_DEBUG_PRINT_EVENTID:
 		ath10k_wmi_event_debug_print(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10X_PDEV_QVIT_EVENTID:
 		ath10k_wmi_event_pdev_qvit(ar, skb);
@@ -5315,6 +5225,7 @@ static void ath10k_wmi_10_1_op_rx(struct ath10k *ar, struct sk_buff *skb)
 		return;
 	case WMI_10X_READY_EVENTID:
 		ath10k_wmi_event_ready(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10X_PDEV_UTF_EVENTID:
 		/* ignore utf events */
@@ -5361,6 +5272,7 @@ static void ath10k_wmi_10_2_op_rx(struct ath10k *ar, struct sk_buff *skb)
 		return;
 	case WMI_10_2_SCAN_EVENTID:
 		ath10k_wmi_event_scan(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10_2_CHAN_INFO_EVENTID:
 		ath10k_wmi_event_chan_info(ar, skb);
@@ -5370,15 +5282,18 @@ static void ath10k_wmi_10_2_op_rx(struct ath10k *ar, struct sk_buff *skb)
 		break;
 	case WMI_10_2_DEBUG_MESG_EVENTID:
 		ath10k_wmi_event_debug_mesg(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10_2_UPDATE_STATS_EVENTID:
 		ath10k_wmi_event_update_stats(ar, skb);
 		break;
 	case WMI_10_2_VDEV_START_RESP_EVENTID:
 		ath10k_wmi_event_vdev_start_resp(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10_2_VDEV_STOPPED_EVENTID:
 		ath10k_wmi_event_vdev_stopped(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10_2_PEER_STA_KICKOUT_EVENTID:
 		ath10k_wmi_event_peer_sta_kickout(ar, skb);
@@ -5394,12 +5309,14 @@ static void ath10k_wmi_10_2_op_rx(struct ath10k *ar, struct sk_buff *skb)
 		break;
 	case WMI_10_2_ROAM_EVENTID:
 		ath10k_wmi_event_roam(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10_2_PROFILE_MATCH:
 		ath10k_wmi_event_profile_match(ar, skb);
 		break;
 	case WMI_10_2_DEBUG_PRINT_EVENTID:
 		ath10k_wmi_event_debug_print(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10_2_PDEV_QVIT_EVENTID:
 		ath10k_wmi_event_pdev_qvit(ar, skb);
@@ -5430,15 +5347,18 @@ static void ath10k_wmi_10_2_op_rx(struct ath10k *ar, struct sk_buff *skb)
 		break;
 	case WMI_10_2_VDEV_STANDBY_REQ_EVENTID:
 		ath10k_wmi_event_vdev_standby_req(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10_2_VDEV_RESUME_REQ_EVENTID:
 		ath10k_wmi_event_vdev_resume_req(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10_2_SERVICE_READY_EVENTID:
 		ath10k_wmi_event_service_ready(ar, skb);
 		return;
 	case WMI_10_2_READY_EVENTID:
 		ath10k_wmi_event_ready(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10_2_PDEV_TEMPERATURE_EVENTID:
 		ath10k_wmi_event_temperature(ar, skb);
@@ -5501,12 +5421,14 @@ static void ath10k_wmi_10_4_op_rx(struct ath10k *ar, struct sk_buff *skb)
 		break;
 	case WMI_10_4_DEBUG_MESG_EVENTID:
 		ath10k_wmi_event_debug_mesg(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10_4_SERVICE_READY_EVENTID:
 		ath10k_wmi_event_service_ready(ar, skb);
 		return;
 	case WMI_10_4_SCAN_EVENTID:
 		ath10k_wmi_event_scan(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10_4_CHAN_INFO_EVENTID:
 		ath10k_wmi_event_chan_info(ar, skb);
@@ -5516,12 +5438,14 @@ static void ath10k_wmi_10_4_op_rx(struct ath10k *ar, struct sk_buff *skb)
 		break;
 	case WMI_10_4_READY_EVENTID:
 		ath10k_wmi_event_ready(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10_4_PEER_STA_KICKOUT_EVENTID:
 		ath10k_wmi_event_peer_sta_kickout(ar, skb);
 		break;
 	case WMI_10_4_ROAM_EVENTID:
 		ath10k_wmi_event_roam(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10_4_HOST_SWBA_EVENTID:
 		ath10k_wmi_event_host_swba(ar, skb);
@@ -5531,12 +5455,15 @@ static void ath10k_wmi_10_4_op_rx(struct ath10k *ar, struct sk_buff *skb)
 		break;
 	case WMI_10_4_DEBUG_PRINT_EVENTID:
 		ath10k_wmi_event_debug_print(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10_4_VDEV_START_RESP_EVENTID:
 		ath10k_wmi_event_vdev_start_resp(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10_4_VDEV_STOPPED_EVENTID:
 		ath10k_wmi_event_vdev_stopped(ar, skb);
+		ath10k_wmi_queue_set_coverage_class_work(ar);
 		break;
 	case WMI_10_4_WOW_WAKEUP_HOST_EVENTID:
 	case WMI_10_4_PEER_RATECODE_LIST_EVENTID:
@@ -5552,6 +5479,9 @@ static void ath10k_wmi_10_4_op_rx(struct ath10k *ar, struct sk_buff *skb)
 		break;
 	case WMI_10_4_PDEV_BSS_CHAN_INFO_EVENTID:
 		ath10k_wmi_event_pdev_bss_chan_info(ar, skb);
+		break;
+	case WMI_10_4_PDEV_TPC_CONFIG_EVENTID:
+		ath10k_wmi_event_pdev_tpc_config(ar, skb);
 		break;
 	default:
 		ath10k_warn(ar, "Unknown eventid: %d\n", id);
@@ -6034,15 +5964,6 @@ static struct sk_buff *ath10k_wmi_10_4_op_gen_init(struct ath10k *ar)
 
 int ath10k_wmi_start_scan_verify(const struct wmi_start_scan_arg *arg)
 {
-	if (arg->ie_len && !arg->ie)
-		return -EINVAL;
-	if (arg->n_channels && !arg->channels)
-		return -EINVAL;
-	if (arg->n_ssids && !arg->ssids)
-		return -EINVAL;
-	if (arg->n_bssids && !arg->bssids)
-		return -EINVAL;
-
 	if (arg->ie_len > WLAN_SCAN_PARAMS_MAX_IE_LEN)
 		return -EINVAL;
 	if (arg->n_channels > ARRAY_SIZE(arg->channels))
@@ -6252,9 +6173,8 @@ void ath10k_wmi_start_scan_init(struct ath10k *ar,
 		| WMI_SCAN_EVENT_COMPLETED
 		| WMI_SCAN_EVENT_BSS_CHANNEL
 		| WMI_SCAN_EVENT_FOREIGN_CHANNEL
+		| WMI_SCAN_EVENT_FOREIGN_CHANNEL_EXIT
 		| WMI_SCAN_EVENT_DEQUEUED;
-	if (QCA_REV_WCN3990(ar))
-		arg->scan_ctrl_flags = ar->fw_flags->flags;
 	arg->scan_ctrl_flags |= WMI_SCAN_CHAN_STAT_EVENT;
 	arg->n_bssids = 1;
 	arg->bssids[0].bssid = "\xFF\xFF\xFF\xFF\xFF\xFF";
@@ -6584,6 +6504,7 @@ ath10k_wmi_op_gen_peer_create(struct ath10k *ar, u32 vdev_id,
 	cmd = (struct wmi_peer_create_cmd *)skb->data;
 	cmd->vdev_id = __cpu_to_le32(vdev_id);
 	ether_addr_copy(cmd->peer_macaddr.addr, peer_addr);
+	cmd->peer_type = __cpu_to_le32(peer_type);
 
 	ath10k_dbg(ar, ATH10K_DBG_WMI,
 		   "wmi peer create vdev_id %d peer_addr %pM\n",
@@ -6844,7 +6765,12 @@ ath10k_wmi_peer_assoc_fill_10_4(struct ath10k *ar, void *buf,
 	struct wmi_10_4_peer_assoc_complete_cmd *cmd = buf;
 
 	ath10k_wmi_peer_assoc_fill_10_2(ar, buf, arg);
-	cmd->peer_bw_rxnss_override = 0;
+	if (arg->peer_bw_rxnss_override)
+		cmd->peer_bw_rxnss_override =
+			__cpu_to_le32((arg->peer_bw_rxnss_override - 1) |
+				      BIT(PEER_BW_RXNSS_OVERRIDE_OFFSET));
+	else
+		cmd->peer_bw_rxnss_override = 0;
 }
 
 static int
@@ -7909,18 +7835,150 @@ ath10k_wmi_10_4_ext_resource_config(struct ath10k *ar,
 {
 	struct wmi_ext_resource_config_10_4_cmd *cmd;
 	struct sk_buff *skb;
+	u32 num_tdls_sleep_sta = 0;
 
 	skb = ath10k_wmi_alloc_skb(ar, sizeof(*cmd));
 	if (!skb)
 		return ERR_PTR(-ENOMEM);
 
+	if (test_bit(WMI_SERVICE_TDLS_UAPSD_SLEEP_STA, ar->wmi.svc_map))
+		num_tdls_sleep_sta = TARGET_10_4_NUM_TDLS_SLEEP_STA;
+
 	cmd = (struct wmi_ext_resource_config_10_4_cmd *)skb->data;
 	cmd->host_platform_config = __cpu_to_le32(type);
 	cmd->fw_feature_bitmap = __cpu_to_le32(fw_feature_bitmap);
+	cmd->wlan_gpio_priority = __cpu_to_le32(-1);
+	cmd->coex_version = __cpu_to_le32(WMI_NO_COEX_VERSION_SUPPORT);
+	cmd->coex_gpio_pin1 = __cpu_to_le32(-1);
+	cmd->coex_gpio_pin2 = __cpu_to_le32(-1);
+	cmd->coex_gpio_pin3 = __cpu_to_le32(-1);
+	cmd->num_tdls_vdevs = __cpu_to_le32(TARGET_10_4_NUM_TDLS_VDEVS);
+	cmd->num_tdls_conn_table_entries = __cpu_to_le32(20);
+	cmd->max_tdls_concurrent_sleep_sta = __cpu_to_le32(num_tdls_sleep_sta);
+	cmd->max_tdls_concurrent_buffer_sta =
+			__cpu_to_le32(TARGET_10_4_NUM_TDLS_BUFFER_STA);
 
 	ath10k_dbg(ar, ATH10K_DBG_WMI,
 		   "wmi ext resource config host type %d firmware feature bitmap %08x\n",
 		   type, fw_feature_bitmap);
+	return skb;
+}
+
+static struct sk_buff *
+ath10k_wmi_10_4_gen_update_fw_tdls_state(struct ath10k *ar, u32 vdev_id,
+					 enum wmi_tdls_state state)
+{
+	struct wmi_10_4_tdls_set_state_cmd *cmd;
+	struct sk_buff *skb;
+	u32 options = 0;
+
+	skb = ath10k_wmi_alloc_skb(ar, sizeof(*cmd));
+	if (!skb)
+		return ERR_PTR(-ENOMEM);
+
+	if (test_bit(WMI_SERVICE_TDLS_EXPLICIT_MODE_ONLY, ar->wmi.svc_map))
+		state = WMI_TDLS_ENABLE_PASSIVE;
+
+	if (test_bit(WMI_SERVICE_TDLS_UAPSD_BUFFER_STA, ar->wmi.svc_map))
+		options |= WMI_TDLS_BUFFER_STA_EN;
+
+	cmd = (struct wmi_10_4_tdls_set_state_cmd *)skb->data;
+	cmd->vdev_id = __cpu_to_le32(vdev_id);
+	cmd->state = __cpu_to_le32(state);
+	cmd->notification_interval_ms = __cpu_to_le32(5000);
+	cmd->tx_discovery_threshold = __cpu_to_le32(100);
+	cmd->tx_teardown_threshold = __cpu_to_le32(5);
+	cmd->rssi_teardown_threshold = __cpu_to_le32(-75);
+	cmd->rssi_delta = __cpu_to_le32(-20);
+	cmd->tdls_options = __cpu_to_le32(options);
+	cmd->tdls_peer_traffic_ind_window = __cpu_to_le32(2);
+	cmd->tdls_peer_traffic_response_timeout_ms = __cpu_to_le32(5000);
+	cmd->tdls_puapsd_mask = __cpu_to_le32(0xf);
+	cmd->tdls_puapsd_inactivity_time_ms = __cpu_to_le32(0);
+	cmd->tdls_puapsd_rx_frame_threshold = __cpu_to_le32(10);
+	cmd->teardown_notification_ms = __cpu_to_le32(10);
+	cmd->tdls_peer_kickout_threshold = __cpu_to_le32(96);
+
+	ath10k_dbg(ar, ATH10K_DBG_WMI, "wmi update fw tdls state %d for vdev %i\n",
+		   state, vdev_id);
+	return skb;
+}
+
+static u32 ath10k_wmi_prepare_peer_qos(u8 uapsd_queues, u8 sp)
+{
+	u32 peer_qos = 0;
+
+	if (uapsd_queues & IEEE80211_WMM_IE_STA_QOSINFO_AC_VO)
+		peer_qos |= WMI_TDLS_PEER_QOS_AC_VO;
+	if (uapsd_queues & IEEE80211_WMM_IE_STA_QOSINFO_AC_VI)
+		peer_qos |= WMI_TDLS_PEER_QOS_AC_VI;
+	if (uapsd_queues & IEEE80211_WMM_IE_STA_QOSINFO_AC_BK)
+		peer_qos |= WMI_TDLS_PEER_QOS_AC_BK;
+	if (uapsd_queues & IEEE80211_WMM_IE_STA_QOSINFO_AC_BE)
+		peer_qos |= WMI_TDLS_PEER_QOS_AC_BE;
+
+	peer_qos |= SM(sp, WMI_TDLS_PEER_SP);
+
+	return peer_qos;
+}
+
+static struct sk_buff *
+ath10k_wmi_10_4_gen_tdls_peer_update(struct ath10k *ar,
+				     const struct wmi_tdls_peer_update_cmd_arg *arg,
+				     const struct wmi_tdls_peer_capab_arg *cap,
+				     const struct wmi_channel_arg *chan_arg)
+{
+	struct wmi_10_4_tdls_peer_update_cmd *cmd;
+	struct wmi_tdls_peer_capabilities *peer_cap;
+	struct wmi_channel *chan;
+	struct sk_buff *skb;
+	u32 peer_qos;
+	int len, chan_len;
+	int i;
+
+	/* tdls peer update cmd has place holder for one channel*/
+	chan_len = cap->peer_chan_len ? (cap->peer_chan_len - 1) : 0;
+
+	len = sizeof(*cmd) + chan_len * sizeof(*chan);
+
+	skb = ath10k_wmi_alloc_skb(ar, len);
+	if (!skb)
+		return ERR_PTR(-ENOMEM);
+
+	memset(skb->data, 0, sizeof(*cmd));
+
+	cmd = (struct wmi_10_4_tdls_peer_update_cmd *)skb->data;
+	cmd->vdev_id = __cpu_to_le32(arg->vdev_id);
+	ether_addr_copy(cmd->peer_macaddr.addr, arg->addr);
+	cmd->peer_state = __cpu_to_le32(arg->peer_state);
+
+	peer_qos = ath10k_wmi_prepare_peer_qos(cap->peer_uapsd_queues,
+					       cap->peer_max_sp);
+
+	peer_cap = &cmd->peer_capab;
+	peer_cap->peer_qos = __cpu_to_le32(peer_qos);
+	peer_cap->buff_sta_support = __cpu_to_le32(cap->buff_sta_support);
+	peer_cap->off_chan_support = __cpu_to_le32(cap->off_chan_support);
+	peer_cap->peer_curr_operclass = __cpu_to_le32(cap->peer_curr_operclass);
+	peer_cap->self_curr_operclass = __cpu_to_le32(cap->self_curr_operclass);
+	peer_cap->peer_chan_len = __cpu_to_le32(cap->peer_chan_len);
+	peer_cap->peer_operclass_len = __cpu_to_le32(cap->peer_operclass_len);
+
+	for (i = 0; i < WMI_TDLS_MAX_SUPP_OPER_CLASSES; i++)
+		peer_cap->peer_operclass[i] = cap->peer_operclass[i];
+
+	peer_cap->is_peer_responder = __cpu_to_le32(cap->is_peer_responder);
+	peer_cap->pref_offchan_num = __cpu_to_le32(cap->pref_offchan_num);
+	peer_cap->pref_offchan_bw = __cpu_to_le32(cap->pref_offchan_bw);
+
+	for (i = 0; i < cap->peer_chan_len; i++) {
+		chan = (struct wmi_channel *)&peer_cap->peer_chan_list[i];
+		ath10k_wmi_put_wmi_channel(chan, &chan_arg[i]);
+	}
+
+	ath10k_dbg(ar, ATH10K_DBG_WMI,
+		   "wmi tdls peer update vdev %i state %d n_chans %u\n",
+		   arg->vdev_id, arg->peer_state, cap->peer_chan_len);
 	return skb;
 }
 
@@ -8303,6 +8361,8 @@ static const struct wmi_ops wmi_10_4_ops = {
 	.gen_delba_send = ath10k_wmi_op_gen_delba_send,
 	.fw_stats_fill = ath10k_wmi_10_4_op_fw_stats_fill,
 	.ext_resource_config = ath10k_wmi_10_4_ext_resource_config,
+	.gen_update_fw_tdls_state = ath10k_wmi_10_4_gen_update_fw_tdls_state,
+	.gen_tdls_peer_update = ath10k_wmi_10_4_gen_tdls_peer_update,
 
 	/* shared with 10.2 */
 	.pull_echo_ev = ath10k_wmi_op_pull_echo_ev,
@@ -8311,6 +8371,7 @@ static const struct wmi_ops wmi_10_4_ops = {
 	.get_vdev_subtype = ath10k_wmi_10_4_op_get_vdev_subtype,
 	.gen_pdev_bss_chan_info_req = ath10k_wmi_10_2_op_gen_pdev_bss_chan_info,
 	.gen_echo = ath10k_wmi_op_gen_echo,
+	.gen_pdev_get_tpc_config = ath10k_wmi_10_2_4_op_gen_pdev_get_tpc_config,
 };
 
 int ath10k_wmi_attach(struct ath10k *ar)
@@ -8367,11 +8428,6 @@ int ath10k_wmi_attach(struct ath10k *ar)
 
 	INIT_WORK(&ar->svc_rdy_work, ath10k_wmi_event_service_ready_work);
 
-	if (QCA_REV_WCN3990(ar)) {
-		spin_lock_init(&ar->wmi.mgmt_tx_lock);
-		idr_init(&ar->wmi.mgmt_pending_tx);
-	}
-
 	return 0;
 }
 
@@ -8381,42 +8437,17 @@ void ath10k_wmi_free_host_mem(struct ath10k *ar)
 
 	/* free the host memory chunks requested by firmware */
 	for (i = 0; i < ar->wmi.num_mem_chunks; i++) {
-		dma_unmap_single(ar->dev,
-				 ar->wmi.mem_chunks[i].paddr,
-				 ar->wmi.mem_chunks[i].len,
-				 DMA_TO_DEVICE);
-		kfree(ar->wmi.mem_chunks[i].vaddr);
+		dma_free_coherent(ar->dev,
+				  ar->wmi.mem_chunks[i].len,
+				  ar->wmi.mem_chunks[i].vaddr,
+				  ar->wmi.mem_chunks[i].paddr);
 	}
 
 	ar->wmi.num_mem_chunks = 0;
 }
 
-static int ath10k_wmi_mgmt_tx_clean_up_pending(int msdu_id, void *ptr,
-					       void *ctx)
-{
-	struct ath10k_mgmt_tx_pkt_addr *pkt_addr = ptr;
-	struct ath10k *ar = ctx;
-	struct sk_buff *msdu;
-
-	ath10k_dbg(ar, ATH10K_DBG_WMI,
-		   "force cleanup mgmt msdu_id %hu\n", msdu_id);
-
-	msdu = pkt_addr->vaddr;
-	dma_unmap_single(ar->dev, pkt_addr->paddr,
-			 msdu->len, DMA_FROM_DEVICE);
-	ieee80211_free_txskb(ar->hw, msdu);
-
-	return 0;
-}
-
 void ath10k_wmi_detach(struct ath10k *ar)
 {
-	if (QCA_REV_WCN3990(ar)) {
-		idr_for_each(&ar->wmi.mgmt_pending_tx,
-			     ath10k_wmi_mgmt_tx_clean_up_pending, ar);
-		idr_destroy(&ar->wmi.mgmt_pending_tx);
-	}
-
 	cancel_work_sync(&ar->svc_rdy_work);
 
 	if (ar->svc_rdy_skb)

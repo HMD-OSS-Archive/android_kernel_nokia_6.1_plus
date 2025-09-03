@@ -9,12 +9,14 @@ of PMIC's from Qualcomm.
 	Definition: Should contain one of:
 		    "qcom,pm8018-mpp",
 		    "qcom,pm8038-mpp",
+		    "qcom,pm8058-mpp",
 		    "qcom,pm8821-mpp",
 		    "qcom,pm8841-mpp",
 		    "qcom,pm8916-mpp",
 		    "qcom,pm8917-mpp",
 		    "qcom,pm8921-mpp",
 		    "qcom,pm8941-mpp",
+		    "qcom,pm8994-mpp",
 		    "qcom,pma8084-mpp",
 
 		    And must contain either "qcom,spmi-mpp" or "qcom,ssbi-mpp"
@@ -142,7 +144,7 @@ to specify in a pin configuration subnode:
 - qcom,dtest:
 	Usage: optional
 	Value type: <u32>
-	Definition: Selects which dtest rail to be routed for digital output.
+	Definition: Selects which dtest rail to be routed in the various functions.
 		    Valid values are 1-4
 
 - qcom,amux-route:
@@ -156,16 +158,6 @@ to specify in a pin configuration subnode:
 	Value type: <none>
 	Definition: Indicates that the pin should be operating in paired mode.
 
-- qcom,dtest-buffer:
-	Usage: optional
-	Value type: <u32>
-	Definition: Selects which dtest rail to be routed for digital input.
-		    It's also valid when the pin is configured as digital
-		    input and output.
-		    4 dtest rails supported in total and more than one rail
-		    could be selected simultaneously. Each bit of the 4 LSBs
-		    represent one dtest rail, such as [3:0] = 0101 means both
-		    dtest1 and dtest3 are selected. Valid values are 1-15.
 Example:
 
 	mpps@a000 {

@@ -40,21 +40,7 @@
 #include "ufshcd.h"
 #include "ufshcd-pltfrm.h"
 
-static int ufshcd_parse_reset_info(struct ufs_hba *hba)
-{
-	int ret = 0;
-
-	hba->core_reset = devm_reset_control_get(hba->dev,
-				"core_reset");
-	if (IS_ERR(hba->core_reset)) {
-		ret = PTR_ERR(hba->core_reset);
-		dev_err(hba->dev, "core_reset unavailable,err = %d\n",
-				ret);
-		hba->core_reset = NULL;
-	}
-
-	return ret;
-}
+#define UFSHCD_DEFAULT_LANES_PER_DIRECTION		2
 
 static int ufshcd_parse_clock_info(struct ufs_hba *hba)
 {
@@ -71,8 +57,6 @@ static int ufshcd_parse_clock_info(struct ufs_hba *hba)
 
 	if (!np)
 		goto out;
-
-	INIT_LIST_HEAD(&hba->clk_list_head);
 
 	cnt = of_property_count_strings(np, "clock-names");
 	if (!cnt || (cnt == -EINVAL)) {
@@ -122,6 +106,13 @@ static int ufshcd_parse_clock_info(struct ufs_hba *hba)
 				"clock-names", i/2, (const char **)&name);
 		if (ret)
 			goto out;
+
+		/* skip vendor clk, vendor clk shall be handled by vops */
+		if (strstr(name, "vendor")) {
+			dev_info(dev, "%s: vendor clk %s is found and skipped\n",
+				 __func__, name);
+			continue;
+		}
 
 		clki = devm_kzalloc(dev, sizeof(*clki), GFP_KERNEL);
 		if (!clki) {
@@ -237,34 +228,7 @@ out:
 	return err;
 }
 
-static void ufshcd_parse_pm_levels(struct ufs_hba *hba)
-{
-	struct device *dev = hba->dev;
-	struct device_node *np = dev->of_node;
-
-	if (np) {
-		if (of_property_read_u32(np, "rpm-level", &hba->rpm_lvl))
-			hba->rpm_lvl = -1;
-		if (of_property_read_u32(np, "spm-level", &hba->spm_lvl))
-			hba->spm_lvl = -1;
-	}
-}
-
-static int ufshcd_parse_pinctrl_info(struct ufs_hba *hba)
-{
-	int ret = 0;
-
-	/* Try to obtain pinctrl handle */
-	hba->pctrl = devm_pinctrl_get(hba->dev);
-	if (IS_ERR(hba->pctrl)) {
-		ret = PTR_ERR(hba->pctrl);
-		hba->pctrl = NULL;
-	}
-
-	return ret;
-}
-
-#ifdef CONFIG_SMP
+#ifdef CONFIG_PM
 /**
  * ufshcd_pltfrm_suspend - suspend power management function
  * @dev: pointer to device handle
@@ -317,15 +281,30 @@ void ufshcd_pltfrm_shutdown(struct platform_device *pdev)
 }
 EXPORT_SYMBOL_GPL(ufshcd_pltfrm_shutdown);
 
+static void ufshcd_init_lanes_per_dir(struct ufs_hba *hba)
+{
+	struct device *dev = hba->dev;
+	int ret;
+
+	ret = of_property_read_u32(dev->of_node, "lanes-per-direction",
+		&hba->lanes_per_direction);
+	if (ret) {
+		dev_dbg(hba->dev,
+			"%s: failed to read lanes-per-direction, ret=%d\n",
+			__func__, ret);
+		hba->lanes_per_direction = UFSHCD_DEFAULT_LANES_PER_DIRECTION;
+	}
+}
+
 /**
  * ufshcd_pltfrm_init - probe routine of the driver
  * @pdev: pointer to Platform device handle
- * @var: pointer to variant specific data
+ * @vops: pointer to variant ops
  *
  * Returns 0 on success, non-zero value on failure
  */
 int ufshcd_pltfrm_init(struct platform_device *pdev,
-		       struct ufs_hba_variant *var)
+		       struct ufs_hba_variant_ops *vops)
 {
 	struct ufs_hba *hba;
 	void __iomem *mmio_base;
@@ -335,8 +314,8 @@ int ufshcd_pltfrm_init(struct platform_device *pdev,
 
 	mem_res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	mmio_base = devm_ioremap_resource(dev, mem_res);
-	if (IS_ERR(*(void **)&mmio_base)) {
-		err = PTR_ERR(*(void **)&mmio_base);
+	if (IS_ERR(mmio_base)) {
+		err = PTR_ERR(mmio_base);
 		goto out;
 	}
 
@@ -353,7 +332,7 @@ int ufshcd_pltfrm_init(struct platform_device *pdev,
 		goto out;
 	}
 
-	hba->var = var;
+	hba->vops = vops;
 
 	err = ufshcd_parse_clock_info(hba);
 	if (err) {
@@ -368,28 +347,11 @@ int ufshcd_pltfrm_init(struct platform_device *pdev,
 		goto dealloc_host;
 	}
 
-	err = ufshcd_parse_reset_info(hba);
-	if (err) {
-		dev_err(&pdev->dev, "%s: reset parse failed %d\n",
-				__func__, err);
-		goto dealloc_host;
-	}
-
-	err = ufshcd_parse_pinctrl_info(hba);
-	if (err) {
-		dev_dbg(&pdev->dev, "%s: unable to parse pinctrl data %d\n",
-				__func__, err);
-		/* let's not fail the probe */
-	}
-
-	ufshcd_parse_pm_levels(hba);
-
-	if (!dev->dma_mask)
-		dev->dma_mask = &dev->coherent_dma_mask;
+	ufshcd_init_lanes_per_dir(hba);
 
 	err = ufshcd_init(hba, mmio_base, irq);
 	if (err) {
-		dev_err(dev, "Intialization failed\n");
+		dev_err(dev, "Initialization failed\n");
 		goto dealloc_host;
 	}
 
@@ -399,6 +361,7 @@ int ufshcd_pltfrm_init(struct platform_device *pdev,
 	pm_runtime_enable(&pdev->dev);
 
 	return 0;
+
 dealloc_host:
 	ufshcd_dealloc_host(hba);
 out:
@@ -408,6 +371,6 @@ EXPORT_SYMBOL_GPL(ufshcd_pltfrm_init);
 
 MODULE_AUTHOR("Santosh Yaragnavi <santosh.sy@samsung.com>");
 MODULE_AUTHOR("Vinayak Holikatti <h.vinayak@samsung.com>");
-MODULE_DESCRIPTION("UFS host controller Pltform bus based glue driver");
+MODULE_DESCRIPTION("UFS host controller Platform bus based glue driver");
 MODULE_LICENSE("GPL");
 MODULE_VERSION(UFSHCD_DRIVER_VERSION);

@@ -193,6 +193,7 @@ static int pm8xxx_rtc_read_time(struct device *dev, struct rtc_time *tm)
 	rc = rtc_valid_tm(tm);
 	if (rc < 0) {
 		dev_err(dev, "Invalid time read from RTC\n");
+		printk("BBox::UEC;18::1\n");
 		return rc;
 	}
 
@@ -225,6 +226,7 @@ static int pm8xxx_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alarm)
 			       sizeof(value));
 	if (rc) {
 		dev_err(dev, "Write to RTC ALARM register failed\n");
+		printk("BBox::UEC;18::2\n");
 		goto rtc_rw_fail;
 	}
 
@@ -240,6 +242,7 @@ static int pm8xxx_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alarm)
 	rc = regmap_write(rtc_dd->regmap, regs->alarm_ctrl, ctrl_reg);
 	if (rc) {
 		dev_err(dev, "Write to RTC alarm control register failed\n");
+		printk("BBox::UEC;18::2\n");
 		goto rtc_rw_fail;
 	}
 
@@ -264,6 +267,7 @@ static int pm8xxx_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alarm)
 			      sizeof(value));
 	if (rc) {
 		dev_err(dev, "RTC alarm time read failed\n");
+		printk("BBox::UEC;18::2\n");
 		return rc;
 	}
 
@@ -274,6 +278,7 @@ static int pm8xxx_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alarm)
 	rc = rtc_valid_tm(&alarm->time);
 	if (rc < 0) {
 		dev_err(dev, "Invalid alarm time read from RTC\n");
+		printk("BBox::UEC;18::2\n");
 		return rc;
 	}
 
@@ -428,6 +433,7 @@ static const struct pm8xxx_rtc_regs pm8941_regs = {
  */
 static const struct of_device_id pm8xxx_id_table[] = {
 	{ .compatible = "qcom,pm8921-rtc", .data = &pm8921_regs },
+	{ .compatible = "qcom,pm8018-rtc", .data = &pm8921_regs },
 	{ .compatible = "qcom,pm8058-rtc", .data = &pm8058_regs },
 	{ .compatible = "qcom,pm8941-rtc", .data = &pm8941_regs },
 	{ },
@@ -442,11 +448,17 @@ static int pm8xxx_rtc_probe(struct platform_device *pdev)
 
 	match = of_match_node(pm8xxx_id_table, pdev->dev.of_node);
 	if (!match)
+	{
+		printk("BBox::UEC;18::3");
 		return -ENXIO;
+	}
 
 	rtc_dd = devm_kzalloc(&pdev->dev, sizeof(*rtc_dd), GFP_KERNEL);
 	if (rtc_dd == NULL)
+	{
+		printk("BBox::UEC;18::3");
 		return -ENOMEM;
+	}
 
 	/* Initialise spinlock to protect RTC control register */
 	spin_lock_init(&rtc_dd->ctrl_reg_lock);
@@ -454,12 +466,14 @@ static int pm8xxx_rtc_probe(struct platform_device *pdev)
 	rtc_dd->regmap = dev_get_regmap(pdev->dev.parent, NULL);
 	if (!rtc_dd->regmap) {
 		dev_err(&pdev->dev, "Parent regmap unavailable.\n");
+		printk("BBox::UEC;18::3");
 		return -ENXIO;
 	}
 
 	rtc_dd->rtc_alarm_irq = platform_get_irq(pdev, 0);
 	if (rtc_dd->rtc_alarm_irq < 0) {
 		dev_err(&pdev->dev, "Alarm IRQ resource absent!\n");
+		printk("BBox::UEC;18::3");
 		return -ENXIO;
 	}
 
@@ -483,6 +497,7 @@ static int pm8xxx_rtc_probe(struct platform_device *pdev)
 	if (IS_ERR(rtc_dd->rtc)) {
 		dev_err(&pdev->dev, "%s: RTC registration failed (%ld)\n",
 			__func__, PTR_ERR(rtc_dd->rtc));
+		printk("BBox::UEC;18::3");
 		return PTR_ERR(rtc_dd->rtc);
 	}
 

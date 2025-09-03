@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  * Based on arch/arm/include/asm/setup.h
  *
@@ -23,4 +24,13 @@
 
 #define COMMAND_LINE_SIZE	2048
 
+/* general memory descriptor */
+struct mem_desc {
+	u64 start;
+	u64 size;
+};
+struct dram_info {
+	u32 rank_num;
+	struct mem_desc rank_info[4];
+};
 #endif

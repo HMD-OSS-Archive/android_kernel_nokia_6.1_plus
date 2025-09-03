@@ -116,7 +116,7 @@ static void a4xx_enable_hwcg(struct msm_gpu *gpu)
 
 static bool a4xx_me_init(struct msm_gpu *gpu)
 {
-	struct msm_ringbuffer *ring = gpu->rb[0];
+	struct msm_ringbuffer *ring = gpu->rb;
 
 	OUT_PKT3(ring, CP_ME_INIT, 17);
 	OUT_RING(ring, 0x000003f7);
@@ -137,7 +137,7 @@ static bool a4xx_me_init(struct msm_gpu *gpu)
 	OUT_RING(ring, 0x00000000);
 	OUT_RING(ring, 0x00000000);
 
-	gpu->funcs->flush(gpu, ring);
+	gpu->funcs->flush(gpu);
 	return a4xx_idle(gpu);
 }
 
@@ -298,7 +298,14 @@ static int a4xx_hw_init(struct msm_gpu *gpu)
 
 static void a4xx_recover(struct msm_gpu *gpu)
 {
+	int i;
+
 	adreno_dump_info(gpu);
+
+	for (i = 0; i < 8; i++) {
+		printk("CP_SCRATCH_REG%d: %u\n", i,
+			gpu_read(gpu, REG_AXXX_CP_SCRATCH_REG0 + i));
+	}
 
 	/* dump registers before resetting gpu, if enabled: */
 	if (hang_debug)
@@ -330,7 +337,7 @@ static void a4xx_destroy(struct msm_gpu *gpu)
 static bool a4xx_idle(struct msm_gpu *gpu)
 {
 	/* wait for ringbuffer to drain: */
-	if (!adreno_idle(gpu, gpu->rb[0]))
+	if (!adreno_idle(gpu))
 		return false;
 
 	/* then wait for GPU to finish: */
@@ -350,6 +357,13 @@ static irqreturn_t a4xx_irq(struct msm_gpu *gpu)
 
 	status = gpu_read(gpu, REG_A4XX_RBBM_INT_0_STATUS);
 	DBG("%s: Int status %08x", gpu->name, status);
+
+	if (status & A4XX_INT0_CP_REG_PROTECT_FAULT) {
+		uint32_t reg = gpu_read(gpu, REG_A4XX_CP_PROTECT_STATUS);
+		printk("CP | Protected mode error| %s | addr=%x\n",
+			reg & (1 << 24) ? "WRITE" : "READ",
+			(reg & 0xFFFFF) >> 2);
+	}
 
 	gpu_write(gpu, REG_A4XX_RBBM_INT_CLEAR_CMD, status);
 
@@ -518,10 +532,9 @@ static const struct adreno_gpu_funcs funcs = {
 		.pm_suspend = a4xx_pm_suspend,
 		.pm_resume = a4xx_pm_resume,
 		.recover = a4xx_recover,
-		.submitted_fence = adreno_submitted_fence,
+		.last_fence = adreno_last_fence,
 		.submit = adreno_submit,
 		.flush = adreno_flush,
-		.active_ring = adreno_active_ring,
 		.irq = a4xx_irq,
 		.destroy = a4xx_destroy,
 #ifdef CONFIG_DEBUG_FS
@@ -538,7 +551,6 @@ struct msm_gpu *a4xx_gpu_init(struct drm_device *dev)
 	struct msm_gpu *gpu;
 	struct msm_drm_private *priv = dev->dev_private;
 	struct platform_device *pdev = priv->gpu_pdev;
-	struct msm_gpu_config a4xx_config = { 0 };
 	int ret;
 
 	if (!pdev) {
@@ -556,21 +568,13 @@ struct msm_gpu *a4xx_gpu_init(struct drm_device *dev)
 	adreno_gpu = &a4xx_gpu->base;
 	gpu = &adreno_gpu->base;
 
-	a4xx_gpu->pdev = pdev;
-
 	gpu->perfcntrs = NULL;
 	gpu->num_perfcntrs = 0;
 
 	adreno_gpu->registers = a4xx_registers;
 	adreno_gpu->reg_offsets = a4xx_register_offsets;
 
-	a4xx_config.ioname = MSM_GPU_DEFAULT_IONAME;
-	a4xx_config.irqname = MSM_GPU_DEFAULT_IRQNAME;
-	a4xx_config.nr_rings = 1;
-	a4xx_config.va_start = 0x300000;
-	a4xx_config.va_end = 0xffffffff;
-
-	ret = adreno_gpu_init(dev, pdev, adreno_gpu, &funcs, &a4xx_config);
+	ret = adreno_gpu_init(dev, pdev, adreno_gpu, &funcs);
 	if (ret)
 		goto fail;
 

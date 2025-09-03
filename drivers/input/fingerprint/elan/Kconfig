@@ -2,8 +2,8 @@
 # Configuration for ELAN
 #
 
-config ELAN_614R
-	bool "ELAN 614R Driver" 
+config ELAN_EFSA680RC
+	bool "ELAN EFSA680RC Driver"
 	default n
 	---help---
-	  This is a ELAN 614R chipset Driver.
+	  This is a ELAN EFSA680RC chipset Driver.

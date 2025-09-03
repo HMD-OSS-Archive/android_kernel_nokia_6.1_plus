@@ -227,7 +227,8 @@ static struct uvc_control_info uvc_ctrls[] = {
 		.size		= 4,
 		.flags		= UVC_CTRL_FLAG_SET_CUR
 				| UVC_CTRL_FLAG_GET_RANGE
-				| UVC_CTRL_FLAG_RESTORE,
+				| UVC_CTRL_FLAG_RESTORE
+				| UVC_CTRL_FLAG_AUTO_UPDATE,
 	},
 	{
 		.entity		= UVC_GUID_UVC_CAMERA,
@@ -1990,9 +1991,6 @@ int uvc_ctrl_add_mapping(struct uvc_video_chain *chain,
 	}
 	if (!found)
 		return -ENOENT;
-
-	if (ctrl->info.size < mapping->size)
-		return -EINVAL;
 
 	if (mutex_lock_interruptible(&chain->ctrl_mutex))
 		return -ERESTARTSYS;

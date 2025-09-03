@@ -1,5 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <linux/compiler.h>
 #include <linux/export.h>
+#include <linux/kasan-checks.h>
 #include <linux/thread_info.h>
 #include <linux/uaccess.h>
 #include <linux/kernel.h>
@@ -14,8 +16,6 @@
 #define IS_UNALIGNED(src, dst)	\
 	(((long) dst | (long) src) & (sizeof(long) - 1))
 #endif
-
-#define CHECK_ALIGN(v, a) ((((unsigned long)(v)) & ((a) - 1)) == 0)
 
 /*
  * Do a strncpy, return length of string without final '\0'.
@@ -38,21 +38,6 @@ static inline long do_strncpy_from_user(char *dst, const char __user *src,
 
 	if (IS_UNALIGNED(src, dst))
 		goto byte_at_a_time;
-
-	/* Copy a byte at a time until we align to 8 bytes */
-	while (max && (!CHECK_ALIGN(src + res, 8))) {
-		char c;
-		int ret;
-
-		ret = __get_user(c, src + res);
-		if (ret)
-			return -EFAULT;
-		dst[res] = c;
-		if (!c)
-			return res;
-		res++;
-		max--;
-	}
 
 	while (max >= sizeof(unsigned long)) {
 		unsigned long c, data;
@@ -128,6 +113,7 @@ long strncpy_from_user(char *dst, const char __user *src, long count)
 		unsigned long max = max_addr - src_addr;
 		long retval;
 
+		kasan_check_write(dst, count);
 		check_object_size(dst, count, false);
 		user_access_begin();
 		retval = do_strncpy_from_user(dst, src, count, max);

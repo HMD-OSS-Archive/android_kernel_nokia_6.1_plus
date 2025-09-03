@@ -84,9 +84,6 @@ struct msm_rd_state {
 
 	bool open;
 
-	struct dentry *ent;
-	struct drm_info_node *node;
-
 	/* current submit to read out: */
 	struct msm_gem_submit *submit;
 
@@ -116,10 +113,14 @@ static void rd_write(struct msm_rd_state *rd, const void *buf, int sz)
 		if (!rd->open)
 			return;
 
+		/* Note that smp_load_acquire() is not strictly required
+		 * as CIRC_SPACE_TO_END() does not access the tail more
+		 * than once.
+		 */
 		n = min(sz, circ_space_to_end(&rd->fifo));
 		memcpy(fptr, ptr, n);
 
-		fifo->head = (fifo->head + n) & (BUF_SZ - 1);
+		smp_store_release(&fifo->head, (fifo->head + n) & (BUF_SZ - 1));
 		sz  -= n;
 		ptr += n;
 
@@ -150,12 +151,17 @@ static ssize_t rd_read(struct file *file, char __user *buf,
 	if (ret)
 		goto out;
 
+	/* Note that smp_load_acquire() is not strictly required
+	 * as CIRC_CNT_TO_END() does not access the head more than
+	 * once.
+	 */
 	n = min_t(int, sz, circ_count_to_end(&rd->fifo));
-	ret = copy_to_user(buf, fptr, n);
-	if (ret)
+	if (copy_to_user(buf, fptr, n)) {
+		ret = -EFAULT;
 		goto out;
+	}
 
-	fifo->tail = (fifo->tail + n) & (BUF_SZ - 1);
+	smp_store_release(&fifo->tail, (fifo->tail + n) & (BUF_SZ - 1));
 	*ppos += n;
 
 	wake_up_all(&rd->fifo_event);
@@ -223,6 +229,7 @@ int msm_rd_debugfs_init(struct drm_minor *minor)
 {
 	struct msm_drm_private *priv = minor->dev->dev_private;
 	struct msm_rd_state *rd;
+	struct dentry *ent;
 
 	/* only create on first minor: */
 	if (priv->rd)
@@ -240,54 +247,30 @@ int msm_rd_debugfs_init(struct drm_minor *minor)
 
 	init_waitqueue_head(&rd->fifo_event);
 
-	rd->node = kzalloc(sizeof(*rd->node), GFP_KERNEL);
-	if (!rd->node)
-		goto fail;
-
-	rd->ent = debugfs_create_file("rd", S_IFREG | S_IRUGO,
+	ent = debugfs_create_file("rd", S_IFREG | S_IRUGO,
 			minor->debugfs_root, rd, &rd_debugfs_fops);
-	if (!rd->ent) {
-		DRM_ERROR("Cannot create /sys/kernel/debug/dri/%s/rd\n",
-				minor->debugfs_root->d_name.name);
+	if (!ent) {
+		DRM_ERROR("Cannot create /sys/kernel/debug/dri/%pd/rd\n",
+				minor->debugfs_root);
 		goto fail;
 	}
-
-	rd->node->minor = minor;
-	rd->node->dent  = rd->ent;
-	rd->node->info_ent = NULL;
-
-	mutex_lock(&minor->debugfs_lock);
-	list_add(&rd->node->list, &minor->debugfs_list);
-	mutex_unlock(&minor->debugfs_lock);
 
 	return 0;
 
 fail:
-	msm_rd_debugfs_cleanup(minor);
+	msm_rd_debugfs_cleanup(priv);
 	return -1;
 }
 
-void msm_rd_debugfs_cleanup(struct drm_minor *minor)
+void msm_rd_debugfs_cleanup(struct msm_drm_private *priv)
 {
-	struct msm_drm_private *priv = minor->dev->dev_private;
 	struct msm_rd_state *rd = priv->rd;
 
 	if (!rd)
 		return;
 
 	priv->rd = NULL;
-
-	debugfs_remove(rd->ent);
-
-	if (rd->node) {
-		mutex_lock(&minor->debugfs_lock);
-		list_del(&rd->node->list);
-		mutex_unlock(&minor->debugfs_lock);
-		kfree(rd->node);
-	}
-
 	mutex_destroy(&rd->read_lock);
-
 	kfree(rd);
 }
 
@@ -296,29 +279,24 @@ static void snapshot_buf(struct msm_rd_state *rd,
 		uint64_t iova, uint32_t size)
 {
 	struct msm_gem_object *obj = submit->bos[idx].obj;
-	uint64_t offset = 0;
+	const char *buf;
+
+	buf = msm_gem_get_vaddr(&obj->base);
+	if (IS_ERR(buf))
+		return;
 
 	if (iova) {
-		offset = iova - submit->bos[idx].iova;
+		buf += iova - submit->bos[idx].iova;
 	} else {
 		iova = submit->bos[idx].iova;
 		size = obj->base.size;
 	}
 
-	/* Always write the RD_GPUADDR so we know how big the buffer is */
 	rd_write_section(rd, RD_GPUADDR,
-			(uint64_t[2]) { iova, size }, 16);
+			(uint32_t[3]){ iova, size, iova >> 32 }, 12);
+	rd_write_section(rd, RD_BUFFER_CONTENTS, buf, size);
 
-	/* But only dump contents for buffers marked as read and not secure */
-	if (submit->bos[idx].flags & MSM_SUBMIT_BO_READ &&
-		!(obj->flags & MSM_BO_SECURE)) {
-		const char *buf = msm_gem_vaddr(&obj->base);
-
-		if (IS_ERR_OR_NULL(buf))
-			return;
-
-		rd_write_section(rd, RD_BUFFER_CONTENTS, buf + offset, size);
-	}
+	msm_gem_put_vaddr(&obj->base);
 }
 
 /* called under struct_mutex */
@@ -340,13 +318,20 @@ void msm_rd_dump_submit(struct msm_gem_submit *submit)
 
 	n = snprintf(msg, sizeof(msg), "%.*s/%d: fence=%u",
 			TASK_COMM_LEN, current->comm, task_pid_nr(current),
-			submit->fence);
+			submit->fence->seqno);
 
 	rd_write_section(rd, RD_CMD, msg, ALIGN(n, 4));
 
 	if (rd_full) {
-		for (i = 0; i < submit->nr_bos; i++)
+		for (i = 0; i < submit->nr_bos; i++) {
+			/* buffers that are written to probably don't start out
+			 * with anything interesting:
+			 */
+			if (submit->bos[i].flags & MSM_SUBMIT_BO_WRITE)
+				continue;
+
 			snapshot_buf(rd, submit, i, 0, 0);
+		}
 	}
 
 	for (i = 0; i < submit->nr_cmds; i++) {
@@ -369,7 +354,7 @@ void msm_rd_dump_submit(struct msm_gem_submit *submit)
 		case MSM_SUBMIT_CMD_CTX_RESTORE_BUF:
 		case MSM_SUBMIT_CMD_BUF:
 			rd_write_section(rd, RD_CMDSTREAM_ADDR,
-					(uint64_t[2]) { iova, szd }, 16);
+				(uint32_t[3]){ iova, szd, iova >> 32 }, 12);
 			break;
 		}
 	}

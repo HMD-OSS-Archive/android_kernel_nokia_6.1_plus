@@ -8,7 +8,7 @@ SLUB can enable debugging only for selected slabs in order to avoid
 an impact on overall system performance which may make a bug more
 difficult to find.
 
-In order to switch debugging on one can add a option "slub_debug"
+In order to switch debugging on one can add an option "slub_debug"
 to the kernel command line. That will enable full debugging for
 all slabs.
 
@@ -35,8 +35,8 @@ slub_debug=<Debug-Options>,<slab name>
 				Enable options only for select slabs
 
 Possible debug options are
-	F		Sanity checks on (enables SLAB_DEBUG_FREE. Sorry
-			SLAB legacy issues)
+	F		Sanity checks on (enables SLAB_DEBUG_CONSISTENCY_CHECKS
+			Sorry SLAB legacy issues)
 	Z		Red zoning
 	P		Poisoning (object and padding)
 	U		User tracking (free and alloc)
@@ -251,10 +251,6 @@ terminating 0. That zero has overwritten the first byte of the Redzone field.
 After reporting the details of the issue encountered the FIX SLUB message
 tells us that SLUB has restored the Redzone to its proper value and then
 system operations continue.
-
-If it is required to only report the details of the issue and panic immediately
-after in order to possibly catch any scribblers one can set the
-CONFIG_DEBUG_SLUB_PANIC_ON option.
 
 Emergency operations:
 ---------------------

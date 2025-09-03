@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * This file contains helper code to handle channel
  * settings and keeping track of what is possible at
@@ -319,8 +320,7 @@ static int cfg80211_get_chans_dfs_required(struct wiphy *wiphy,
 		if (!c)
 			return -EINVAL;
 
-		if ((c->flags & IEEE80211_CHAN_RADAR) &&
-		    !(wiphy->flags & WIPHY_FLAG_DFS_OFFLOAD))
+		if (c->flags & IEEE80211_CHAN_RADAR)
 			return 1;
 	}
 	return 0;
@@ -373,6 +373,7 @@ int cfg80211_chandef_dfs_required(struct wiphy *wiphy,
 	case NL80211_IFTYPE_AP_VLAN:
 	case NL80211_IFTYPE_WDS:
 	case NL80211_IFTYPE_P2P_DEVICE:
+	case NL80211_IFTYPE_NAN:
 		break;
 	case NL80211_IFTYPE_UNSPECIFIED:
 	case NUM_NL80211_IFTYPES:
@@ -520,6 +521,8 @@ bool cfg80211_beaconing_iface_active(struct wireless_dev *wdev)
 	case NL80211_IFTYPE_AP_VLAN:
 	case NL80211_IFTYPE_WDS:
 	case NL80211_IFTYPE_P2P_DEVICE:
+	/* Can NAN type be considered as beaconing interface? */
+	case NL80211_IFTYPE_NAN:
 		break;
 	case NL80211_IFTYPE_UNSPECIFIED:
 	case NUM_NL80211_IFTYPES:
@@ -529,15 +532,10 @@ bool cfg80211_beaconing_iface_active(struct wireless_dev *wdev)
 	return active;
 }
 
-bool cfg80211_any_wiphy_oper_chan(struct wiphy *wiphy,
-				  struct ieee80211_channel *chan)
+static bool cfg80211_is_wiphy_oper_chan(struct wiphy *wiphy,
+					struct ieee80211_channel *chan)
 {
 	struct wireless_dev *wdev;
-
-	ASSERT_RTNL();
-
-	if (!(chan->flags & IEEE80211_CHAN_RADAR))
-		return false;
 
 	list_for_each_entry(wdev, &wiphy->wdev_list, list) {
 		wdev_lock(wdev);
@@ -551,6 +549,27 @@ bool cfg80211_any_wiphy_oper_chan(struct wiphy *wiphy,
 			return true;
 		}
 		wdev_unlock(wdev);
+	}
+
+	return false;
+}
+
+bool cfg80211_any_wiphy_oper_chan(struct wiphy *wiphy,
+				  struct ieee80211_channel *chan)
+{
+	struct cfg80211_registered_device *rdev;
+
+	ASSERT_RTNL();
+
+	if (!(chan->flags & IEEE80211_CHAN_RADAR))
+		return false;
+
+	list_for_each_entry(rdev, &cfg80211_rdev_list, list) {
+		if (!reg_dfs_domain_same(wiphy, &rdev->wiphy))
+			continue;
+
+		if (cfg80211_is_wiphy_oper_chan(&rdev->wiphy, chan))
+			return true;
 	}
 
 	return false;
@@ -579,9 +598,7 @@ static bool cfg80211_get_chans_dfs_available(struct wiphy *wiphy,
 		if (c->flags & IEEE80211_CHAN_DISABLED)
 			return false;
 
-		/* check for radar flags */
-		if ((!(wiphy->flags & WIPHY_FLAG_DFS_OFFLOAD)) &&
-		    (c->flags & IEEE80211_CHAN_RADAR) &&
+		if ((c->flags & IEEE80211_CHAN_RADAR)  &&
 		    (c->dfs_state != NL80211_DFS_AVAILABLE))
 			return false;
 	}
@@ -615,6 +632,7 @@ static bool cfg80211_chandef_dfs_available(struct wiphy *wiphy,
 		r = cfg80211_get_chans_dfs_available(wiphy,
 						     chandef->center_freq2,
 						     width);
+		break;
 	default:
 		WARN_ON(chandef->center_freq2);
 		break;
@@ -692,17 +710,10 @@ static bool cfg80211_secondary_chans_ok(struct wiphy *wiphy,
 
 	for (freq = start_freq; freq <= end_freq; freq += 20) {
 		c = ieee80211_get_channel(wiphy, freq);
-
-		if (!c)
-			return false;
-
-		if ((!(wiphy->flags & WIPHY_FLAG_DFS_OFFLOAD)) &&
-		    (c->flags & prohibited_flags & IEEE80211_CHAN_RADAR))
-			return false;
-
-		if (c->flags & prohibited_flags & ~IEEE80211_CHAN_RADAR)
+		if (!c || c->flags & prohibited_flags)
 			return false;
 	}
+
 	return true;
 }
 
@@ -824,7 +835,7 @@ static bool cfg80211_ir_permissive_chan(struct wiphy *wiphy,
 
 	ASSERT_RTNL();
 
-	if (!config_enabled(CONFIG_CFG80211_REG_RELAX_NO_IR) ||
+	if (!IS_ENABLED(CONFIG_CFG80211_REG_RELAX_NO_IR) ||
 	    !(wiphy->regulatory_flags & REGULATORY_ENABLE_RELAX_NO_IR))
 		return false;
 
@@ -877,7 +888,7 @@ static bool cfg80211_ir_permissive_chan(struct wiphy *wiphy,
 		if (chan == other_chan)
 			return true;
 
-		if (chan->band != IEEE80211_BAND_5GHZ)
+		if (chan->band != NL80211_BAND_5GHZ)
 			continue;
 
 		r1 = cfg80211_get_unii(chan->center_freq);
@@ -1054,6 +1065,7 @@ cfg80211_get_chan_state(struct wireless_dev *wdev,
 	case NL80211_IFTYPE_AP_VLAN:
 	case NL80211_IFTYPE_WDS:
 	case NL80211_IFTYPE_P2P_DEVICE:
+	case NL80211_IFTYPE_NAN:
 		/* these interface types don't really have a channel */
 		return;
 	case NL80211_IFTYPE_UNSPECIFIED:

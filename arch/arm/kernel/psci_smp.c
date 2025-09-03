@@ -98,12 +98,12 @@ int psci_cpu_kill(unsigned int cpu)
 	for (i = 0; i < 10; i++) {
 		err = psci_ops.affinity_info(cpu_logical_map(cpu), 0);
 		if (err == PSCI_0_2_AFFINITY_LEVEL_OFF) {
-			pr_debug("CPU%d killed.\n", cpu);
+			pr_info("CPU%d killed.\n", cpu);
 			return 1;
 		}
 
 		msleep(10);
-		pr_debug("Retrying again to check for CPU kill\n");
+		pr_info("Retrying again to check for CPU kill\n");
 	}
 
 	pr_warn("CPU%d may not have shut down cleanly (AFFINITY_INFO reports %d)\n",
@@ -120,7 +120,7 @@ bool __init psci_smp_available(void)
 	return (psci_ops.cpu_on != NULL);
 }
 
-struct smp_operations __initdata psci_smp_ops = {
+const struct smp_operations psci_smp_ops __initconst = {
 	.smp_boot_secondary	= psci_boot_secondary,
 #ifdef CONFIG_HOTPLUG_CPU
 	.cpu_disable		= psci_cpu_disable,
