@@ -80,10 +80,6 @@
 #define VDD_PDPHY_VOL_MAX		3300000 /* uV */
 #define VDD_PDPHY_HPM_LOAD		3000 /* uA */
 
-/* timers */
-#define RECEIVER_RESPONSE_TIME		15	/* tReceiverResponse */
-#define HARD_RESET_COMPLETE_TIME	5	/* tHardResetComplete */
-
 struct usb_pdphy {
 	struct device *dev;
 	struct regmap *regmap;
@@ -112,6 +108,7 @@ struct usb_pdphy {
 	int tx_status;
 	u8 frame_filter_val;
 	bool in_test_data_mode;
+	bool rx_busy;
 
 	enum data_role data_role;
 	enum power_role power_role;
@@ -404,13 +401,14 @@ int pd_phy_open(struct pd_phy_params *params)
 }
 EXPORT_SYMBOL(pd_phy_open);
 
-int pd_phy_signal(enum pd_sig_type sig)
+int pd_phy_signal(enum pd_sig_type sig, unsigned int timeout_ms)
 {
 	u8 val;
 	int ret;
 	struct usb_pdphy *pdphy = __pdphy;
 
-	dev_dbg(pdphy->dev, "%s: type %d\n", __func__, sig);
+	dev_dbg(pdphy->dev, "%s: type %d timeout %u\n", __func__, sig,
+			timeout_ms);
 
 	if (!pdphy) {
 		pr_err("%s: pdphy not found\n", __func__);
@@ -438,8 +436,7 @@ int pd_phy_signal(enum pd_sig_type sig)
 		return ret;
 
 	ret = wait_event_interruptible_timeout(pdphy->tx_waitq,
-		pdphy->tx_status != -EINPROGRESS,
-		msecs_to_jiffies(HARD_RESET_COMPLETE_TIME));
+		pdphy->tx_status != -EINPROGRESS, msecs_to_jiffies(timeout_ms));
 	if (ret <= 0) {
 		dev_err(pdphy->dev, "%s: failed ret %d", __func__, ret);
 		return ret ? ret : -ETIMEDOUT;
@@ -458,15 +455,16 @@ int pd_phy_signal(enum pd_sig_type sig)
 }
 EXPORT_SYMBOL(pd_phy_signal);
 
-int pd_phy_write(u16 hdr, const u8 *data, size_t data_len, enum pd_sop_type sop)
+int pd_phy_write(u16 hdr, const u8 *data, size_t data_len,
+	enum pd_sop_type sop, unsigned int timeout_ms)
 {
 	u8 val;
 	int ret;
 	size_t total_len = data_len + USB_PDPHY_MSG_HDR_LEN;
 	struct usb_pdphy *pdphy = __pdphy;
 
-	dev_dbg(pdphy->dev, "%s: hdr %x frame sop_type %d\n",
-			__func__, hdr, sop);
+	dev_dbg(pdphy->dev, "%s: hdr %x frame sop_type %d timeout %u\n",
+			__func__, hdr, sop, timeout_ms);
 
 	if (data && data_len)
 		print_hex_dump_debug("tx data obj:", DUMP_PREFIX_NONE, 32, 4,
@@ -489,7 +487,7 @@ int pd_phy_write(u16 hdr, const u8 *data, size_t data_len, enum pd_sop_type sop)
 	}
 
 	ret = pdphy_reg_read(pdphy, &val, USB_PDPHY_RX_ACKNOWLEDGE, 1);
-	if (ret || val) {
+	if (ret || val || pdphy->rx_busy) {
 		dev_err(pdphy->dev, "%s: RX message pending\n", __func__);
 		return -EBUSY;
 	}
@@ -527,8 +525,7 @@ int pd_phy_write(u16 hdr, const u8 *data, size_t data_len, enum pd_sop_type sop)
 		return ret;
 
 	ret = wait_event_interruptible_timeout(pdphy->tx_waitq,
-		pdphy->tx_status != -EINPROGRESS,
-		msecs_to_jiffies(RECEIVER_RESPONSE_TIME));
+		pdphy->tx_status != -EINPROGRESS, msecs_to_jiffies(timeout_ms));
 	if (ret <= 0) {
 		dev_err(pdphy->dev, "%s: failed ret %d", __func__, ret);
 		return ret ? ret : -ETIMEDOUT;
@@ -537,7 +534,7 @@ int pd_phy_write(u16 hdr, const u8 *data, size_t data_len, enum pd_sop_type sop)
 	if (hdr && !pdphy->tx_status)
 		pdphy->tx_bytes += data_len + USB_PDPHY_MSG_HDR_LEN;
 
-	return pdphy->tx_status ? pdphy->tx_status : 0;
+	return pdphy->tx_status ? pdphy->tx_status : data_len;
 }
 EXPORT_SYMBOL(pd_phy_write);
 
@@ -581,10 +578,6 @@ EXPORT_SYMBOL(pd_phy_close);
 static irqreturn_t pdphy_msg_tx_irq(int irq, void *data)
 {
 	struct usb_pdphy *pdphy = data;
-
-	/* TX already aborted by received signal */
-	if (pdphy->tx_status != -EINPROGRESS)
-		return IRQ_HANDLED;
 
 	if (irq == pdphy->msg_tx_irq) {
 		pdphy->msg_tx_cnt++;
@@ -639,10 +632,6 @@ static irqreturn_t pdphy_sig_rx_irq_thread(int irq, void *data)
 	if (pdphy->signal_cb)
 		pdphy->signal_cb(pdphy->usbpd, frame_type);
 
-	if (pdphy->tx_status == -EINPROGRESS) {
-		pdphy->tx_status = -EBUSY;
-		wake_up(&pdphy->tx_waitq);
-	}
 done:
 	return IRQ_HANDLED;
 }
@@ -676,6 +665,15 @@ static int pd_phy_bist_mode(u8 bist_mode)
 }
 
 static irqreturn_t pdphy_msg_rx_irq(int irq, void *data)
+{
+	struct usb_pdphy *pdphy = data;
+
+	pdphy->rx_busy = true;
+
+	return IRQ_WAKE_THREAD;
+}
+
+static irqreturn_t pdphy_msg_rx_irq_thread(int irq, void *data)
 {
 	u8 size, rx_status, frame_type;
 	u8 buf[32];
@@ -731,6 +729,7 @@ static irqreturn_t pdphy_msg_rx_irq(int irq, void *data)
 		false);
 	pdphy->rx_bytes += size + 1;
 done:
+	pdphy->rx_busy = false;
 	return IRQ_HANDLED;
 }
 
@@ -817,7 +816,7 @@ static int pdphy_probe(struct platform_device *pdev)
 
 	ret = pdphy_request_irq(pdphy, pdev->dev.of_node,
 		&pdphy->msg_rx_irq, "msg-rx", pdphy_msg_rx_irq,
-		NULL, (IRQF_TRIGGER_RISING | IRQF_ONESHOT));
+		pdphy_msg_rx_irq_thread, (IRQF_TRIGGER_RISING | IRQF_ONESHOT));
 	if (ret < 0)
 		return ret;
 

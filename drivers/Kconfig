@@ -212,8 +212,6 @@ source "drivers/bif/Kconfig"
 
 source "drivers/sensors/Kconfig"
 
-source "drivers/tee/Kconfig"
-
 source "drivers/fih/Kconfig"
 
 source "drivers/haptics/Kconfig

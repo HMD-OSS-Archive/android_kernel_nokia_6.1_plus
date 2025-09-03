@@ -282,7 +282,7 @@ out:
 	return ret;
 }
 
-void dwc3_ep0_stall_and_restart(struct dwc3 *dwc)
+static void dwc3_ep0_stall_and_restart(struct dwc3 *dwc)
 {
 	struct dwc3_ep		*dep;
 

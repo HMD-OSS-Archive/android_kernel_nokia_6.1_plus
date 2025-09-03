@@ -84,8 +84,6 @@ struct mmc_ios {
 #define MMC_SET_DRIVER_TYPE_A	1
 #define MMC_SET_DRIVER_TYPE_C	2
 #define MMC_SET_DRIVER_TYPE_D	3
-
-	bool enhanced_strobe;			/* hs400es selection */
 };
 
 /* states to represent load on the host */
@@ -419,7 +417,6 @@ struct mmc_host {
 #define MMC_CAP_HW_RESET	(1 << 31)	/* Hardware reset */
 
 	u32			caps2;		/* More host capabilities */
-	u32			cached_caps2;
 
 #define MMC_CAP2_BOOTPART_NOACC	(1 << 0)	/* Boot partition no access */
 #define MMC_CAP2_FULL_PWR_CYCLE	(1 << 2)	/* Can do full power cycle */
@@ -598,13 +595,10 @@ struct mmc_host {
 	struct mmc_request	*err_mrq;
 #ifdef CONFIG_BLOCK
 	int			latency_hist_enabled;
-	struct io_latency_state io_lat_read;
-	struct io_latency_state io_lat_write;
+	struct io_latency_state io_lat_s;
 #endif
 
 	bool sdr104_wa;
-	atomic_t rpmb_req_pending;
-	struct mutex		rpmb_req_mutex;
 	unsigned long		private[0] ____cacheline_aligned;
 };
 
@@ -643,7 +637,6 @@ static inline void *mmc_cmdq_private(struct mmc_host *host)
 #define mmc_bus_manual_resume(host) ((host)->bus_resume_flags & \
 				MMC_BUSRESUME_MANUAL_RESUME)
 
-#ifdef CONFIG_MMC_BLOCK_DEFERRED_RESUME
 static inline void mmc_set_bus_resume_policy(struct mmc_host *host, int manual)
 {
 	if (manual)
@@ -651,11 +644,6 @@ static inline void mmc_set_bus_resume_policy(struct mmc_host *host, int manual)
 	else
 		host->bus_resume_flags &= ~MMC_BUSRESUME_MANUAL_RESUME;
 }
-#else
-static inline void mmc_set_bus_resume_policy(struct mmc_host *host, int manual)
-{
-}
-#endif
 
 extern int mmc_resume_bus(struct mmc_host *host);
 
@@ -834,11 +822,6 @@ static inline bool mmc_card_ddr52(struct mmc_card *card)
 static inline bool mmc_card_hs400(struct mmc_card *card)
 {
 	return card->host->ios.timing == MMC_TIMING_MMC_HS400;
-}
-
-static inline bool mmc_card_hs400es(struct mmc_card *card)
-{
-	return card->host->ios.enhanced_strobe;
 }
 
 void mmc_retune_enable(struct mmc_host *host);

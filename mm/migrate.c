@@ -75,7 +75,7 @@ int migrate_prep_local(void)
 	return 0;
 }
 
-int isolate_movable_page(struct page *page, isolate_mode_t mode)
+bool isolate_movable_page(struct page *page, isolate_mode_t mode)
 {
 	struct address_space *mapping;
 
@@ -126,14 +126,14 @@ int isolate_movable_page(struct page *page, isolate_mode_t mode)
 	__SetPageIsolated(page);
 	unlock_page(page);
 
-	return 0;
+	return true;
 
 out_no_isolated:
 	unlock_page(page);
 out_putpage:
 	put_page(page);
 out:
-	return -EBUSY;
+	return false;
 }
 
 /* It should be called on page which is PG_movable */

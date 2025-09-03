@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -77,11 +77,10 @@ enum {	//this id syncs with the item 'fih,panel-id' of each panel's dtsi
 	FIH_R69338_1080P_VIDEO_PANEL_PL2 = 15,			//ZZDC sunqiupeng add for bringup PL2 2nd panel@20171226
 	FIH_CTC_OTM1911A_FHD_VIDEO_PANEL = 16,		//SW4-HL-Display-BringUpCTCOTM1911A-00+_20180116
 	FIH_AUO_OTM1911A_FHD_VIDEO_PANEL = 17,		//SW4-HL-Display-OTM1911A-AUO-BringUp-00+_20180221
-    FIH_CTC_JD9522Z_FHD_VIDEO_PANEL = 18,           //SW4-HL-CTL-HDR-ReadLcmSwId-00+_20180330
-    FIH_CTL_CTC_OTM1911A_FHD_VIDEO_PANEL = 19,	//SW4-HL-Display-CTL-GT915L-CTC_n_AUO-BringUp-00+_20180226
-    FIH_CTL_AUO_OTM1911A_FHD_VIDEO_PANEL = 20,      //SW4-HL-CTL-HDR-ReadLcmSwId-00+_20180330
-    FIH_CTL_CTC_JD9522Z_FHD_VIDEO_PANEL = 21,       //SW4-HL-CTL-HDR-ReadLcmSwId-00+_20180330
-    FIH_FT8719_1080P_VIDEO_PANEL = 22,
+        FIH_CTC_JD9522Z_FHD_VIDEO_PANEL = 18,           //SW4-HL-CTL-HDR-ReadLcmSwId-00+_20180330
+        FIH_CTL_CTC_OTM1911A_FHD_VIDEO_PANEL = 19,	//SW4-HL-Display-CTL-GT915L-CTC_n_AUO-BringUp-00+_20180226
+        FIH_CTL_AUO_OTM1911A_FHD_VIDEO_PANEL = 20,      //SW4-HL-CTL-HDR-ReadLcmSwId-00+_20180330
+        FIH_CTL_CTC_JD9522Z_FHD_VIDEO_PANEL = 21,       //SW4-HL-CTL-HDR-ReadLcmSwId-00+_20180330
 };
 //SW4-HL-Display-ImplementPanelID-00+}_20151112
 
@@ -415,7 +414,6 @@ struct lcd_panel_info {
 	u32 h_active_low;
 	u32 v_back_porch;
 	u32 v_front_porch;
-	u32 v_front_porch_fixed;
 	u32 v_pulse_width;
 	u32 v_active_low;
 	u32 border_clr;
@@ -1099,23 +1097,6 @@ static inline u32 mdss_panel_get_framerate(struct mdss_panel_info *panel_info)
 		break;
 	}
 	return frame_rate;
-}
-
-/*
- * mdss_panel_get_vtotal_fixed() - return panel device tree vertical height
- * @pinfo:	Pointer to panel info containing all panel information
- *
- * Returns the total height as defined in panel device tree including any
- * blanking regions which are not visible to user but used to calculate
- * panel clock.
- */
-static inline int mdss_panel_get_vtotal_fixed(struct mdss_panel_info *pinfo)
-{
-	return pinfo->yres + pinfo->lcdc.v_back_porch +
-			pinfo->lcdc.v_front_porch_fixed +
-			pinfo->lcdc.v_pulse_width+
-			pinfo->lcdc.border_top +
-			pinfo->lcdc.border_bottom;
 }
 
 /*

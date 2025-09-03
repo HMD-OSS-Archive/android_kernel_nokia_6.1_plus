@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -33,7 +33,6 @@
 #include <linux/debugfs.h>
 #include <linux/gpio.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/of_gpio.h>
 #include <linux/dma-mapping.h>
 #include <linux/sched.h>
@@ -44,7 +43,6 @@
 #include <linux/msm-sps.h>
 #include <linux/msm-bus.h>
 #include <linux/msm-bus-board.h>
-#include <soc/qcom/boot_stats.h>
 #include "spi_qsd.h"
 
 #define SPI_MAX_BYTES_PER_WORD			(4)
@@ -54,9 +52,6 @@ static int msm_spi_pm_suspend_runtime(struct device *device);
 static inline void msm_spi_dma_unmap_buffers(struct msm_spi *dd);
 static int get_local_resources(struct msm_spi *dd);
 static void put_local_resources(struct msm_spi *dd);
-static void msm_spi_slv_setup(struct msm_spi *dd);
-static inline int msm_spi_wait_valid(struct msm_spi *dd);
-static int reset_core(struct msm_spi *dd);
 
 static inline int msm_spi_configure_gsbi(struct msm_spi *dd,
 					struct platform_device *pdev)
@@ -87,22 +82,15 @@ static inline int msm_spi_configure_gsbi(struct msm_spi *dd,
 	return 0;
 }
 
-static inline int msm_spi_register_init(struct msm_spi *dd)
+static inline void msm_spi_register_init(struct msm_spi *dd)
 {
-	if (dd->pdata->is_slv_ctrl) {
-		writel_relaxed(0x00000002, dd->base + SPI_SW_RESET);
-		 if (msm_spi_wait_valid(dd))
-			return -EIO;
-	} else {
-		writel_relaxed(0x00000001, dd->base + SPI_SW_RESET);
-	}
+	writel_relaxed(0x00000001, dd->base + SPI_SW_RESET);
 	msm_spi_set_state(dd, SPI_OP_STATE_RESET);
 	writel_relaxed(0x00000000, dd->base + SPI_OPERATIONAL);
 	writel_relaxed(0x00000000, dd->base + SPI_CONFIG);
 	writel_relaxed(0x00000000, dd->base + SPI_IO_MODES);
 	if (dd->qup_ver)
 		writel_relaxed(0x00000000, dd->base + QUP_OPERATIONAL_MASK);
-	return 0;
 }
 
 static int msm_spi_pinctrl_init(struct msm_spi *dd)
@@ -556,7 +544,7 @@ static inline int msm_spi_set_state(struct msm_spi *dd,
 	}
 	if (msm_spi_wait_valid(dd))
 		return -EIO;
-	atomic_set(&dd->qup_state, state);
+
 	return 0;
 }
 
@@ -947,7 +935,6 @@ static inline void msm_spi_ack_transfer(struct msm_spi *dd)
 static inline irqreturn_t msm_spi_qup_irq(int irq, void *dev_id)
 {
 	u32 op, ret = IRQ_NONE;
-	u32 slv;
 	struct msm_spi *dd = dev_id;
 
 	if (pm_runtime_suspended(dd->dev)) {
@@ -961,9 +948,7 @@ static inline irqreturn_t msm_spi_qup_irq(int irq, void *dev_id)
 	}
 
 	op = readl_relaxed(dd->base + SPI_OPERATIONAL);
-	slv = readl_relaxed(dd->base + SPI_SLAVE_IRQ_STATUS);
 	writel_relaxed(op, dd->base + SPI_OPERATIONAL);
-	writel_relaxed(slv, dd->base + SPI_SLAVE_IRQ_STATUS);
 	/*
 	 * Ensure service flag was cleared before further
 	 * processing of interrupt.
@@ -1252,10 +1237,7 @@ msm_spi_use_dma(struct msm_spi *dd, struct spi_transfer *tr, u8 bpw)
 static void
 msm_spi_set_transfer_mode(struct msm_spi *dd, u8 bpw, u32 read_count)
 {
-	if (dd->pdata->is_slv_ctrl) {
-		dd->tx_mode = SPI_BAM_MODE;
-		dd->rx_mode = SPI_BAM_MODE;
-	} else if (msm_spi_use_dma(dd, dd->cur_transfer, bpw)) {
+	if (msm_spi_use_dma(dd, dd->cur_transfer, bpw)) {
 		dd->tx_mode = SPI_BAM_MODE;
 		dd->rx_mode = SPI_BAM_MODE;
 	} else {
@@ -1374,7 +1356,7 @@ static void get_transfer_length(struct msm_spi *dd)
 static int msm_spi_process_transfer(struct msm_spi *dd)
 {
 	u8  bpw;
-	u32 max_speed = 0;
+	u32 max_speed;
 	u32 read_count;
 	u32 timeout;
 	u32 spi_ioc;
@@ -1413,7 +1395,7 @@ static int msm_spi_process_transfer(struct msm_spi *dd)
 			DIV_ROUND_UP(max_speed, MSEC_PER_SEC)));
 
 	read_count = DIV_ROUND_UP(dd->cur_msg_len, dd->bytes_per_word);
-	if (dd->spi->mode & SPI_LOOP && !dd->pdata->is_slv_ctrl)
+	if (dd->spi->mode & SPI_LOOP)
 		int_loopback = 1;
 
 	if (msm_spi_set_state(dd, SPI_OP_STATE_RESET))
@@ -1435,11 +1417,8 @@ static int msm_spi_process_transfer(struct msm_spi *dd)
 	msm_spi_set_qup_io_modes(dd);
 	msm_spi_set_spi_config(dd, bpw);
 	msm_spi_set_qup_config(dd, bpw);
-	if (!dd->pdata->is_slv_ctrl)
-		spi_ioc = msm_spi_set_spi_io_control(dd);
+	spi_ioc = msm_spi_set_spi_io_control(dd);
 	msm_spi_set_qup_op_mask(dd);
-	if (dd->pdata->is_slv_ctrl)
-		msm_spi_slv_setup(dd);
 
 	/* The output fifo interrupt handler will handle all writes after
 	   the first. Restricting this to one write avoids contention
@@ -1496,10 +1475,6 @@ static int msm_spi_process_transfer(struct msm_spi *dd)
 		}
 	} while (msm_spi_dma_send_next(dd));
 
-	if (status && dd->pdata->is_slv_ctrl) {
-		if (reset_core(dd))
-			dev_err(dd->dev, "Reset failed\n");
-	}
 	msm_spi_udelay(dd->xfrs_delay_usec);
 
 transfer_end:
@@ -1510,20 +1485,12 @@ transfer_end:
 	dd->rx_mode = SPI_MODE_NONE;
 
 	msm_spi_set_state(dd, SPI_OP_STATE_RESET);
-	if (!dd->cur_transfer->cs_change && !dd->pdata->is_slv_ctrl)
+	if (!dd->cur_transfer->cs_change)
 		writel_relaxed(spi_ioc & ~SPI_IO_C_MX_CS_MODE,
 		       dd->base + SPI_IO_CONTROL);
 	return status;
 }
 
-static int msm_spi_slv_abort(struct spi_master *spi)
-{
-	struct msm_spi *dd = spi_master_get_devdata(spi);
-
-	complete_all(&dd->tx_transfer_complete);
-	complete_all(&dd->rx_transfer_complete);
-	return 0;
-}
 
 static inline void msm_spi_set_cs(struct spi_device *spi, bool set_flag)
 {
@@ -1575,11 +1542,10 @@ static inline void msm_spi_set_cs(struct spi_device *spi, bool set_flag)
 	pm_runtime_put_autosuspend(dd->dev);
 }
 
-static int reset_core(struct msm_spi *dd)
+static void reset_core(struct msm_spi *dd)
 {
 	u32 spi_ioc;
-	if (msm_spi_register_init(dd))
-		return -EIO;
+	msm_spi_register_init(dd);
 	/*
 	 * The SPI core generates a bogus input overrun error on some targets,
 	 * when a transition from run to reset state occurs and if the FIFO has
@@ -1587,17 +1553,15 @@ static int reset_core(struct msm_spi *dd)
 	 * bit.
 	 */
 	msm_spi_enable_error_flags(dd);
-	if (!dd->pdata->is_slv_ctrl) {
-		spi_ioc = readl_relaxed(dd->base + SPI_IO_CONTROL);
-		spi_ioc |= SPI_IO_C_NO_TRI_STATE;
-		writel_relaxed(spi_ioc, dd->base + SPI_IO_CONTROL);
-		/*
-		 * Ensure that the IO control is written to before returning.
-		 */
-		mb();
-	}
+
+	spi_ioc = readl_relaxed(dd->base + SPI_IO_CONTROL);
+	spi_ioc |= SPI_IO_C_NO_TRI_STATE;
+	writel_relaxed(spi_ioc , dd->base + SPI_IO_CONTROL);
+	/*
+	 * Ensure that the IO control is written to before returning.
+	 */
+	mb();
 	msm_spi_set_state(dd, SPI_OP_STATE_RESET);
-	return 0;
 }
 
 static void put_local_resources(struct msm_spi *dd)
@@ -1711,11 +1675,7 @@ static int msm_spi_transfer_one(struct spi_master *master,
 			return -EINVAL;
 		}
 
-		if (reset_core(dd)) {
-			mutex_unlock(&dd->core_lock);
-			spi_finalize_current_message(master);
-			return -EIO;
-		}
+		reset_core(dd);
 		if (dd->use_dma) {
 			msm_spi_bam_pipe_connect(dd, &dd->bam.prod,
 					&dd->bam.prod.config);
@@ -1796,51 +1756,6 @@ static int msm_spi_unprepare_transfer_hardware(struct spi_master *master)
 	return 0;
 }
 
-static void msm_spi_slv_setup(struct msm_spi *dd)
-{
-	u32 spi_config = readl_relaxed(dd->base + SPI_CONFIG);
-	u32 qup_config = readl_relaxed(dd->base + QUP_CONFIG);
-	u32 irq_en = GENMASK(6, 0);
-
-	qup_config &= ~QUP_CFG_MODE;
-	qup_config |= SPI_EN_EXT_OUT_FLAG;
-	writel_relaxed(qup_config, dd->base + QUP_CONFIG);
-	writel_relaxed(spi_config, dd->base + SPI_CONFIG);
-	writel_relaxed(irq_en, (dd->base + SPI_SLAVE_IRQ_EN));
-	if (dd->read_buf && !dd->write_buf) {
-		u32 slv_cfg =
-			readl_relaxed(dd->base + SPI_SLAVE_CONFIG);
-		slv_cfg |= (RX_UNBALANCED_MASK | SPI_S_CGC_EN);
-		writel_relaxed(slv_cfg, (dd->base + SPI_SLAVE_CONFIG));
-	}
-	/*
-	 * Ensure the previous write completed before enabling slave mode.
-	 */
-	mb();
-
-	spi_config = readl_relaxed(dd->base + SPI_CONFIG);
-	qup_config = readl_relaxed(dd->base + QUP_CONFIG);
-
-	qup_config |= QUP_CONFIG_SPI_SLAVE;
-	spi_config |= SPI_CFG_SLAVE_OP;
-
-	writel_relaxed(qup_config, dd->base + QUP_CONFIG);
-	writel_relaxed(spi_config, dd->base + SPI_CONFIG);
-	/*
-	 * Ensure the previous write completed before enabling clk_on bit.
-	 */
-	mb();
-
-	qup_config = readl_relaxed(dd->base + QUP_CONFIG);
-	qup_config |= (APP_CLK_ON_EN | CORE_CLK_ON_EN |
-		FIFO_CLK_ON_EN | CORE_EX_CLK_ON_EN);
-	writel_relaxed(qup_config, dd->base + QUP_CONFIG);
-	/*
-	 * Ensure Slave setup completes before returning.
-	 */
-	mb();
-}
-
 static int msm_spi_setup(struct spi_device *spi)
 {
 	struct msm_spi	*dd;
@@ -1915,16 +1830,14 @@ static int msm_spi_setup(struct spi_device *spi)
 	mb();
 	if (dd->pdata->is_shared)
 		put_local_resources(dd);
+	/* Counter-part of system-resume when runtime-pm is not enabled. */
+	if (!pm_runtime_enabled(dd->dev))
+		msm_spi_pm_suspend_runtime(dd->dev);
 
 no_resources:
 	mutex_unlock(&dd->core_lock);
-	/* Counter-part of system-resume when runtime-pm is not enabled. */
-	if (!pm_runtime_enabled(dd->dev)) {
-		msm_spi_pm_suspend_runtime(dd->dev);
-	} else {
-		pm_runtime_mark_last_busy(dd->dev);
-		pm_runtime_put_autosuspend(dd->dev);
-	}
+	pm_runtime_mark_last_busy(dd->dev);
+	pm_runtime_put_autosuspend(dd->dev);
 
 err_setup_exit:
 	return rc;
@@ -2062,33 +1975,6 @@ static ssize_t set_stats(struct device *dev, struct device_attribute *attr,
 }
 
 static DEVICE_ATTR(stats, S_IRUGO | S_IWUSR, show_stats, set_stats);
-
-static ssize_t show_qup_state(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	ssize_t ret = 0;
-	struct platform_device *pdev = container_of(dev, struct
-						platform_device, dev);
-	struct spi_master *master = platform_get_drvdata(pdev);
-	struct msm_spi *dd;
-
-	dd = spi_master_get_devdata(master);
-	/* This check should not fail */
-	if (dd)
-		ret = snprintf(buf, sizeof(int), "%u\n",
-				atomic_read(&dd->qup_state));
-	return ret;
-}
-
-static ssize_t set_qup_state(struct device *dev,
-			struct device_attribute *attr,
-			const char *buf, size_t count)
-{
-	return 1;
-}
-
-static DEVICE_ATTR(spi_qup_state, S_IWUSR | S_IRUGO,
-			show_qup_state, set_qup_state);
 
 static struct attribute *dev_attrs[] = {
 	&dev_attr_stats.attr,
@@ -2363,8 +2249,6 @@ struct msm_spi_platform_data *msm_spi_dt_to_pdata(
 			&pdata->rt_priority,		 DT_OPT,  DT_BOOL,  0},
 		{"qcom,shared",
 			&pdata->is_shared,		 DT_OPT,  DT_BOOL,  0},
-		{"qcom,slv-ctrl",
-			&pdata->is_slv_ctrl,		DT_OPT,  DT_BOOL,  0},
 		{NULL,  NULL,                            0,       0,        0},
 		};
 
@@ -2517,8 +2401,7 @@ static int init_resources(struct platform_device *pdev)
 		}
 	}
 
-	if (msm_spi_register_init(dd))
-		goto err_spi_state;
+	msm_spi_register_init(dd);
 	/*
 	 * The SPI core generates a bogus input overrun error on some targets,
 	 * when a transition from run to reset state occurs and if the FIFO has
@@ -2527,9 +2410,7 @@ static int init_resources(struct platform_device *pdev)
 	 */
 	msm_spi_enable_error_flags(dd);
 
-	if (dd->pdata && !dd->pdata->is_slv_ctrl)
-		writel_relaxed(SPI_IO_C_NO_TRI_STATE,
-				dd->base + SPI_IO_CONTROL);
+	writel_relaxed(SPI_IO_C_NO_TRI_STATE, dd->base + SPI_IO_CONTROL);
 	rc = msm_spi_set_state(dd, SPI_OP_STATE_RESET);
 	if (rc)
 		goto err_spi_state;
@@ -2571,12 +2452,6 @@ err_clk_get:
 	return rc;
 }
 
-static const struct of_device_id msm_spi_dt_match[] = {
-	{ .compatible = "qcom,spi-qup-v2", },
-	{ .compatible = "qcom,qup-v26", },
-	{}
-};
-
 static int msm_spi_probe(struct platform_device *pdev)
 {
 	struct spi_master      *master;
@@ -2585,7 +2460,6 @@ static int msm_spi_probe(struct platform_device *pdev)
 	int			i = 0;
 	int                     rc = -ENXIO;
 	struct msm_spi_platform_data *pdata;
-	char boot_marker[40];
 
 		pr_err("wbl msm_spi_probe enter :\n");
 		pr_err("wbl 2  msm_spi_probe enter :\n");
@@ -2611,9 +2485,6 @@ static int msm_spi_probe(struct platform_device *pdev)
 	dd = spi_master_get_devdata(master);
 
 	if (pdev->dev.of_node) {
-		const struct of_device_id *dev_id;
-		enum msm_spi_qup_version ver;
-
 		dd->qup_ver = SPI_QUP_VERSION_BFAM;
 		master->dev.of_node = pdev->dev.of_node;
 		pdata = msm_spi_dt_to_pdata(pdev, dd);
@@ -2628,17 +2499,6 @@ static int msm_spi_probe(struct platform_device *pdev)
 				"using default bus_num %d\n", pdev->id);
 		else
 			master->bus_num = pdev->id = rc;
-
-		dev_id = of_match_device(msm_spi_dt_match, &pdev->dev);
-		if (dev_id)
-			ver = SPI_QUP_VERSION_SPI_SLV;
-		else
-			ver = SPI_QUP_VERSION_BFAM;
-
-		if (ver >= SPI_QUP_VERSION_SPI_SLV)
-			dd->slv_support = true;
-		else
-			dd->slv_support = false;
 	} else {
 		pdata = pdev->dev.platform_data;
 		dd->qup_ver = SPI_QUP_VERSION_NONE;
@@ -2657,10 +2517,6 @@ static int msm_spi_probe(struct platform_device *pdev)
 		}
 	}
 
-	snprintf(boot_marker, sizeof(boot_marker),
-			"M - DRIVER MSM SPI_%d Init", pdev->id);
-	place_marker(boot_marker);
-
 	for (i = 0; i < ARRAY_SIZE(spi_cs_rsrcs); ++i)
 		dd->cs_gpios[i].valid = 0;
 
@@ -2675,7 +2531,6 @@ static int msm_spi_probe(struct platform_device *pdev)
 	dd->mem_size = resource_size(resource);
 	dd->dev = &pdev->dev;
 
-	atomic_set(&dd->qup_state, SPI_OP_STATE_RESET);
 	if (pdata) {
 		master->rt = pdata->rt_priority;
 		if (pdata->dma_config) {
@@ -2702,21 +2557,6 @@ static int msm_spi_probe(struct platform_device *pdev)
 	}
 
 	spi_dma_mask(&pdev->dev);
-
-	if (pdata && pdata->is_slv_ctrl) {
-		if (!dd->slv_support) {
-			rc = -ENXIO;
-			dev_err(&pdev->dev, "QUP ver %d, no slv support\n",
-								dd->qup_ver);
-			goto err_probe_res;
-		}
-
-		master->slave		= true;
-		master->set_cs		= NULL;
-		master->setup		= NULL;
-		master->slave_abort	= msm_spi_slv_abort;
-	}
-
 skip_dma_resources:
 
 	spin_lock_init(&dd->queue_lock);
@@ -2749,12 +2589,7 @@ skip_dma_resources:
 		dev_err(&pdev->dev, "failed to create dev. attrs : %d\n", rc);
 		goto err_attrs;
 	}
-	rc = sysfs_create_file(&(dd->dev->kobj), &dev_attr_spi_qup_state.attr);
 	spi_debugfs_init(dd);
-
-	snprintf(boot_marker, sizeof(boot_marker),
-			"M - DRIVER MSM SPI_%d Ready", pdev->id);
-	place_marker(boot_marker);
 
 	return 0;
 
@@ -2907,7 +2742,6 @@ static int msm_spi_remove(struct platform_device *pdev)
 
 	spi_debugfs_exit(dd);
 	sysfs_remove_group(&pdev->dev.kobj, &dev_attr_grp);
-	sysfs_remove_file(&pdev->dev.kobj, &dev_attr_spi_qup_state.attr);
 
 	if (dd->dma_teardown)
 		dd->dma_teardown(dd);
@@ -2922,6 +2756,13 @@ static int msm_spi_remove(struct platform_device *pdev)
 
 	return 0;
 }
+
+static struct of_device_id msm_spi_dt_match[] = {
+	{
+		.compatible = "qcom,spi-qup-v2",
+	},
+	{}
+};
 
 static const struct dev_pm_ops msm_spi_dev_pm_ops = {
 	SET_SYSTEM_SLEEP_PM_OPS(msm_spi_suspend, msm_spi_resume)

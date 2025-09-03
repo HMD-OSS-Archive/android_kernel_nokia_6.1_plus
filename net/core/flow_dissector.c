@@ -6,7 +6,6 @@
 #include <linux/if_vlan.h>
 #include <net/ip.h>
 #include <net/ipv6.h>
-#include <net/rmnet_config.h>
 #include <linux/igmp.h>
 #include <linux/icmp.h>
 #include <linux/sctp.h>
@@ -528,8 +527,8 @@ ip_proto_again:
 out_good:
 	ret = true;
 
+	key_control->thoff = (u16)nhoff;
 out:
-	key_control->thoff = min_t(u16, nhoff, skb ? skb->len : hlen);
 	key_basic->n_proto = proto;
 	key_basic->ip_proto = ip_proto;
 
@@ -537,6 +536,7 @@ out:
 
 out_bad:
 	ret = false;
+	key_control->thoff = min_t(u16, nhoff, skb ? skb->len : hlen);
 	goto out;
 }
 EXPORT_SYMBOL(__skb_flow_dissect);

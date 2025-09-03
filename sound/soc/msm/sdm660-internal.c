@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -44,8 +44,7 @@ enum {
 };
 
 enum {
-	BT_SLIM7_RX,
-	BT_SLIM7_TX,
+	BT_SLIM7,
 	FM_SLIM8,
 	SLIM_MAX,
 };
@@ -139,8 +138,7 @@ static struct dev_config int_mi2s_cfg[] = {
 };
 
 static struct dev_config bt_fm_cfg[] = {
-	[BT_SLIM7_RX] = {SAMPLING_RATE_8KHZ, SNDRV_PCM_FORMAT_S16_LE, 1},
-	[BT_SLIM7_TX] = {SAMPLING_RATE_8KHZ, SNDRV_PCM_FORMAT_S16_LE, 1},
+	[BT_SLIM7] = {SAMPLING_RATE_8KHZ, SNDRV_PCM_FORMAT_S16_LE, 1},
 	[FM_SLIM8] = {SAMPLING_RATE_48KHZ, SNDRV_PCM_FORMAT_S16_LE, 2},
 };
 
@@ -153,8 +151,6 @@ static const char *const int_mi2s_tx_ch_text[] = {"One", "Two",
 static char const *bit_format_text[] = {"S16_LE", "S24_LE", "S24_3LE"};
 static const char *const loopback_mclk_text[] = {"DISABLE", "ENABLE"};
 static char const *bt_sample_rate_text[] = {"KHZ_8", "KHZ_16", "KHZ_48"};
-static char const *bt_sample_rate_rx_text[] = {"KHZ_8", "KHZ_16", "KHZ_48"};
-static char const *bt_sample_rate_tx_text[] = {"KHZ_8", "KHZ_16", "KHZ_48"};
 
 static SOC_ENUM_SINGLE_EXT_DECL(int0_mi2s_rx_sample_rate, int_mi2s_rate_text);
 static SOC_ENUM_SINGLE_EXT_DECL(int0_mi2s_rx_chs, int_mi2s_ch_text);
@@ -171,8 +167,6 @@ static SOC_ENUM_SINGLE_EXT_DECL(int4_mi2s_rx_format, bit_format_text);
 static SOC_ENUM_SINGLE_EXT_DECL(int5_mi2s_tx_chs, int_mi2s_ch_text);
 static SOC_ENUM_SINGLE_EXT_DECL(loopback_mclk_en, loopback_mclk_text);
 static SOC_ENUM_SINGLE_EXT_DECL(bt_sample_rate, bt_sample_rate_text);
-static SOC_ENUM_SINGLE_EXT_DECL(bt_sample_rate_rx, bt_sample_rate_rx_text);
-static SOC_ENUM_SINGLE_EXT_DECL(bt_sample_rate_tx, bt_sample_rate_tx_text);
 
 static int msm_dmic_event(struct snd_soc_dapm_widget *w,
 			  struct snd_kcontrol *kcontrol, int event);
@@ -630,18 +624,12 @@ static int msm_btfm_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 
 	switch (dai_link->be_id) {
 	case MSM_BACKEND_DAI_SLIMBUS_7_RX:
-		param_set_mask(params, SNDRV_PCM_HW_PARAM_FORMAT,
-				bt_fm_cfg[BT_SLIM7_RX].bit_format);
-		rate->min = rate->max = bt_fm_cfg[BT_SLIM7_RX].sample_rate;
-		channels->min = channels->max =
-			bt_fm_cfg[BT_SLIM7_RX].channels;
-		break;
 	case MSM_BACKEND_DAI_SLIMBUS_7_TX:
 		param_set_mask(params, SNDRV_PCM_HW_PARAM_FORMAT,
-				bt_fm_cfg[BT_SLIM7_TX].bit_format);
-		rate->min = rate->max = bt_fm_cfg[BT_SLIM7_TX].sample_rate;
+				bt_fm_cfg[BT_SLIM7].bit_format);
+		rate->min = rate->max = bt_fm_cfg[BT_SLIM7].sample_rate;
 		channels->min = channels->max =
-			bt_fm_cfg[BT_SLIM7_TX].channels;
+			bt_fm_cfg[BT_SLIM7].channels;
 		break;
 
 	case MSM_BACKEND_DAI_SLIMBUS_8_TX:
@@ -847,7 +835,7 @@ static int msm_bt_sample_rate_get(struct snd_kcontrol *kcontrol,
 	 * when used for BT_SCO use case. Return either Rx or Tx sample rate
 	 * value.
 	 */
-	switch (bt_fm_cfg[BT_SLIM7_RX].sample_rate) {
+	switch (bt_fm_cfg[BT_SLIM7].sample_rate) {
 	case SAMPLING_RATE_48KHZ:
 		ucontrol->value.integer.value[0] = 2;
 		break;
@@ -860,7 +848,7 @@ static int msm_bt_sample_rate_get(struct snd_kcontrol *kcontrol,
 		break;
 	}
 	pr_debug("%s: sample rate = %d", __func__,
-		 bt_fm_cfg[BT_SLIM7_RX].sample_rate);
+		 bt_fm_cfg[BT_SLIM7].sample_rate);
 
 	return 0;
 }
@@ -870,111 +858,20 @@ static int msm_bt_sample_rate_put(struct snd_kcontrol *kcontrol,
 {
 	switch (ucontrol->value.integer.value[0]) {
 	case 1:
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate = SAMPLING_RATE_16KHZ;
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate = SAMPLING_RATE_16KHZ;
+		bt_fm_cfg[BT_SLIM7].sample_rate = SAMPLING_RATE_16KHZ;
 		break;
 	case 2:
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate = SAMPLING_RATE_48KHZ;
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate = SAMPLING_RATE_48KHZ;
+		bt_fm_cfg[BT_SLIM7].sample_rate = SAMPLING_RATE_48KHZ;
 		break;
 	case 0:
 	default:
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate = SAMPLING_RATE_8KHZ;
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate = SAMPLING_RATE_8KHZ;
+		bt_fm_cfg[BT_SLIM7].sample_rate = SAMPLING_RATE_8KHZ;
 		break;
 	}
 	pr_debug("%s: sample rates: slim7_rx = %d, value = %d\n",
 		 __func__,
-		 bt_fm_cfg[BT_SLIM7_RX].sample_rate,
+		 bt_fm_cfg[BT_SLIM7].sample_rate,
 		 ucontrol->value.enumerated.item[0]);
-
-	return 0;
-}
-
-static int msm_bt_sample_rate_rx_get(struct snd_kcontrol *kcontrol,
-					struct snd_ctl_elem_value *ucontrol)
-{
-	switch (bt_fm_cfg[BT_SLIM7_RX].sample_rate) {
-	case SAMPLING_RATE_48KHZ:
-		ucontrol->value.integer.value[0] = 2;
-		break;
-	case SAMPLING_RATE_16KHZ:
-		ucontrol->value.integer.value[0] = 1;
-		break;
-	case SAMPLING_RATE_8KHZ:
-	default:
-		ucontrol->value.integer.value[0] = 0;
-		break;
-	}
-	pr_debug("%s: sample rate = %d", __func__,
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate);
-
-	return 0;
-}
-
-static int msm_bt_sample_rate_rx_put(struct snd_kcontrol *kcontrol,
-					struct snd_ctl_elem_value *ucontrol)
-{
-	switch (ucontrol->value.integer.value[0]) {
-	case 1:
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate = SAMPLING_RATE_16KHZ;
-		break;
-	case 2:
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate = SAMPLING_RATE_48KHZ;
-		break;
-	case 0:
-	default:
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate = SAMPLING_RATE_8KHZ;
-		break;
-	}
-	pr_debug("%s: sample rates: slim7_rx = %d, value = %d\n",
-		__func__,
-		bt_fm_cfg[BT_SLIM7_RX].sample_rate,
-		ucontrol->value.enumerated.item[0]);
-
-	return 0;
-}
-
-static int msm_bt_sample_rate_tx_get(struct snd_kcontrol *kcontrol,
-					struct snd_ctl_elem_value *ucontrol)
-{
-	switch (bt_fm_cfg[BT_SLIM7_TX].sample_rate) {
-	case SAMPLING_RATE_48KHZ:
-		ucontrol->value.integer.value[0] = 2;
-		break;
-	case SAMPLING_RATE_16KHZ:
-		ucontrol->value.integer.value[0] = 1;
-		break;
-	case SAMPLING_RATE_8KHZ:
-	default:
-		ucontrol->value.integer.value[0] = 0;
-		break;
-	}
-	pr_debug("%s: sample rate = %d", __func__,
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate);
-
-	return 0;
-}
-
-static int msm_bt_sample_rate_tx_put(struct snd_kcontrol *kcontrol,
-					struct snd_ctl_elem_value *ucontrol)
-{
-	switch (ucontrol->value.integer.value[0]) {
-	case 1:
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate = SAMPLING_RATE_16KHZ;
-		break;
-	case 2:
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate = SAMPLING_RATE_48KHZ;
-		break;
-	case 0:
-	default:
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate = SAMPLING_RATE_8KHZ;
-		break;
-	}
-	pr_debug("%s: sample rates: slim7_tx = %d, value = %d\n",
-		__func__,
-		bt_fm_cfg[BT_SLIM7_TX].sample_rate,
-		ucontrol->value.enumerated.item[0]);
 
 	return 0;
 }
@@ -1006,12 +903,6 @@ static const struct snd_kcontrol_new msm_snd_controls[] = {
 	SOC_ENUM_EXT("BT SampleRate", bt_sample_rate,
 			msm_bt_sample_rate_get,
 			msm_bt_sample_rate_put),
-	SOC_ENUM_EXT("BT SampleRate RX", bt_sample_rate_rx,
-			msm_bt_sample_rate_rx_get,
-			msm_bt_sample_rate_rx_put),
-	SOC_ENUM_EXT("BT SampleRate TX", bt_sample_rate_tx,
-			msm_bt_sample_rate_tx_get,
-			msm_bt_sample_rate_tx_put),
 };
 
 static const struct snd_kcontrol_new msm_sdw_controls[] = {
@@ -1402,8 +1293,6 @@ static int msm_audrx_init(struct snd_soc_pcm_runtime *rtd)
 	snd_soc_dapm_ignore_suspend(dapm, "Secondary Mic");
 	snd_soc_dapm_ignore_suspend(dapm, "Digital Mic1");
 	snd_soc_dapm_ignore_suspend(dapm, "Digital Mic2");
-	snd_soc_dapm_ignore_suspend(dapm, "Digital Mic3");
-	snd_soc_dapm_ignore_suspend(dapm, "Digital Mic4");
 
 	snd_soc_dapm_ignore_suspend(dapm, "EAR");
 	snd_soc_dapm_ignore_suspend(dapm, "HEADPHONE");
@@ -1411,9 +1300,9 @@ static int msm_audrx_init(struct snd_soc_pcm_runtime *rtd)
 	snd_soc_dapm_ignore_suspend(dapm, "AMIC1");
 	snd_soc_dapm_ignore_suspend(dapm, "AMIC2");
 	snd_soc_dapm_ignore_suspend(dapm, "AMIC3");
-	snd_soc_dapm_sync(dapm);
+  snd_soc_dapm_sync(dapm);
 
-	dapm = snd_soc_codec_get_dapm(dig_cdc);
+  dapm = snd_soc_codec_get_dapm(dig_cdc);
 	snd_soc_dapm_ignore_suspend(dapm, "DMIC1");
 	snd_soc_dapm_ignore_suspend(dapm, "DMIC2");
 	snd_soc_dapm_ignore_suspend(dapm, "DMIC3");
@@ -2741,20 +2630,6 @@ static struct snd_soc_dai_link msm_mi2s_be_dai_links_nxp[] = {
 		.ignore_suspend = 1,
 		.ignore_pmdown_time = 1,
 	},
-	{
-		.name = LPASS_BE_TERT_MI2S_TX,
-		.stream_name = "Tertiary MI2S Capture",
-		.cpu_dai_name = "msm-dai-q6-mi2s.2",
-		.platform_name = "msm-pcm-routing",
-		.codec_name = "msm-stub-codec.1",
-		.codec_dai_name = "msm-stub-tx",
-		.no_pcm = 1,
-		.dpcm_capture = 1,
-		.be_id = MSM_BACKEND_DAI_TERTIARY_MI2S_TX,
-		.be_hw_params_fixup = msm_common_be_hw_params_fixup,
-		.ops = &msm_mi2s_be_ops,
-		.ignore_suspend = 1,
-	},
 };
 
 /*Add for TI TAS2557 */
@@ -2774,69 +2649,6 @@ static struct snd_soc_dai_link msm_mi2s_be_dai_links_ti[] = {
 		.ignore_suspend = 1,
 		.ignore_pmdown_time = 1,
 	},
-	{
-		.name = LPASS_BE_TERT_MI2S_TX,
-		.stream_name = "Tertiary MI2S Capture",
-		.cpu_dai_name = "msm-dai-q6-mi2s.2",
-		.platform_name = "msm-pcm-routing",
-		.codec_name = "msm-stub-codec.1",
-		.codec_dai_name = "msm-stub-tx",
-		.no_pcm = 1,
-		.dpcm_capture = 1,
-		.be_id = MSM_BACKEND_DAI_TERTIARY_MI2S_TX,
-		.be_hw_params_fixup = msm_common_be_hw_params_fixup,
-		.ops = &msm_mi2s_be_ops,
-		.ignore_suspend = 1,
-	},
-};
-
-/*Add for TI TAS2560 Jennyxu */
-static struct snd_soc_dai_link msm_mi2s_be_dai_links_ti_tas2560[] = {
-	{
-		.name = LPASS_BE_TERT_MI2S_RX,
-		.stream_name = "Tertiary MI2S Playback",
-		.cpu_dai_name = "msm-dai-q6-mi2s.2",
-		.platform_name = "msm-pcm-routing",
-		.codec_name = "tas2560.7-004c",
-		.codec_dai_name = "tas2560 ASI1",
-		.no_pcm = 1,
-		.dpcm_playback = 1,
-		.be_id = MSM_BACKEND_DAI_TERTIARY_MI2S_RX,
-		.be_hw_params_fixup = msm_common_be_hw_params_fixup,
-		.ops = &msm_mi2s_be_ops,
-		.ignore_suspend = 1,
-		.ignore_pmdown_time = 1,
-	},
-    {
-		.name = LPASS_BE_TERT_MI2S_TX,
-		.stream_name = "Tertiary MI2S Capture",
-		.cpu_dai_name = "msm-dai-q6-mi2s.2",
-		.platform_name = "msm-pcm-routing",
-		.codec_name = "tas2560.7-004c",
-		.codec_dai_name = "tas2560 ASI1",
-		.no_pcm = 1,
-		.dpcm_capture = 1,
-		.be_id = MSM_BACKEND_DAI_TERTIARY_MI2S_TX,
-		.be_hw_params_fixup = msm_common_be_hw_params_fixup,
-		.ops = &msm_mi2s_be_ops,
-		.ignore_suspend = 1,
-		.ignore_pmdown_time = 1,
-	},
-	{/*Hostless Port for TX*/
-        .name = "Tertiary MI2S_TX Hostless",
-        .stream_name = "Tertiary MI2S_TX Hostless",
-        .cpu_dai_name = "TERT_MI2S_TX_HOSTLESS",
-        .platform_name  = "msm-pcm-hostless",
-        .dynamic = 1,
-        .dpcm_capture = 1,
-         .trigger = {SND_SOC_DPCM_TRIGGER_POST,
-                        SND_SOC_DPCM_TRIGGER_POST},
-         .no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
-         .ignore_suspend = 1,
-         //.ignore_pmdown_time = 1, //dai link has playback support
-         .codec_name     = "tas2560.7-004c",
-         .codec_dai_name = "tas2560 ASI1",
-    },
 };
 
 
@@ -2855,20 +2667,6 @@ static struct snd_soc_dai_link msm_mi2s_be_dai_links_non_amp[] = {
 		.ops = &msm_mi2s_be_ops,
 		.ignore_suspend = 1,
 		.ignore_pmdown_time = 1,
-	},
-	{
-		.name = LPASS_BE_TERT_MI2S_TX,
-		.stream_name = "Tertiary MI2S Capture",
-		.cpu_dai_name = "msm-dai-q6-mi2s.2",
-		.platform_name = "msm-pcm-routing",
-		.codec_name = "msm-stub-codec.1",
-		.codec_dai_name = "msm-stub-tx",
-		.no_pcm = 1,
-		.dpcm_capture = 1,
-		.be_id = MSM_BACKEND_DAI_TERTIARY_MI2S_TX,
-		.be_hw_params_fixup = msm_common_be_hw_params_fixup,
-		.ops = &msm_mi2s_be_ops,
-		.ignore_suspend = 1,
 	},
 };
 static struct snd_soc_dai_link msm_usb_audio_dai_links[] = {
@@ -2944,6 +2742,20 @@ static struct snd_soc_dai_link msm_mi2s_be_dai_links[] = {
 		.no_pcm = 1,
 		.dpcm_capture = 1,
 		.be_id = MSM_BACKEND_DAI_SECONDARY_MI2S_TX,
+		.be_hw_params_fixup = msm_common_be_hw_params_fixup,
+		.ops = &msm_mi2s_be_ops,
+		.ignore_suspend = 1,
+	},
+	{
+		.name = LPASS_BE_TERT_MI2S_TX,
+		.stream_name = "Tertiary MI2S Capture",
+		.cpu_dai_name = "msm-dai-q6-mi2s.2",
+		.platform_name = "msm-pcm-routing",
+		.codec_name = "msm-stub-codec.1",
+		.codec_dai_name = "msm-stub-tx",
+		.no_pcm = 1,
+		.dpcm_capture = 1,
+		.be_id = MSM_BACKEND_DAI_TERTIARY_MI2S_TX,
 		.be_hw_params_fixup = msm_common_be_hw_params_fixup,
 		.ops = &msm_mi2s_be_ops,
 		.ignore_suspend = 1,
@@ -3310,21 +3122,13 @@ static struct snd_soc_card *msm_int_populate_sndcard_dailinks(
 		    	   msm_mi2s_be_dai_links_nxp,
 		       	sizeof(msm_mi2s_be_dai_links_nxp));
 			len1 += ARRAY_SIZE(msm_mi2s_be_dai_links_nxp);
-		} else if (of_property_read_bool(dev->of_node,
-                  "fih,ti-tas2557")) {
-          memcpy(dailink + len1,
-                 msm_mi2s_be_dai_links_ti,
-              sizeof(msm_mi2s_be_dai_links_ti));
-          len1 += ARRAY_SIZE(msm_mi2s_be_dai_links_ti);
-		} else if (of_property_read_bool(dev->of_node,
-				  	"fih,ti-tas2560")) {
-            dev_info(dev,"%s: jennyxu dai links\n",__func__);
-
+		}else if (of_property_read_bool(dev->of_node,
+				  	"fih,ti-tas2557")) {
 			memcpy(dailink + len1,
-		    	   msm_mi2s_be_dai_links_ti_tas2560,
-		       	sizeof(msm_mi2s_be_dai_links_ti_tas2560));
-			len1 += ARRAY_SIZE(msm_mi2s_be_dai_links_ti_tas2560);//jennyxu
-        }else{
+		    	   msm_mi2s_be_dai_links_ti,
+		       	sizeof(msm_mi2s_be_dai_links_ti));
+			len1 += ARRAY_SIZE(msm_mi2s_be_dai_links_ti);
+		}else{
 			memcpy(dailink + len1,
 		    	   msm_mi2s_be_dai_links_non_amp,
 		       	sizeof(msm_mi2s_be_dai_links_non_amp));

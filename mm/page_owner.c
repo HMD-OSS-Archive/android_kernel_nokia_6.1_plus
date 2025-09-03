@@ -129,7 +129,7 @@ static noinline depot_stack_handle_t save_stack(gfp_t flags)
 		.nr_entries = 0,
 		.entries = entries,
 		.max_entries = PAGE_OWNER_STACK_DEPTH,
-		.skip = 2
+		.skip = 0
 	};
 	depot_stack_handle_t handle;
 
